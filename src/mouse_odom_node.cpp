@@ -84,10 +84,10 @@ public:
     cpi_ = declare_parameter<double>("cpi", 1000.0);
 
     // 元コードのY方向補正
-    y_scale_ = declare_parameter<double>("y_scale", -2.0);
+    y_scale_ = declare_parameter<double>("y_scale", -1.0);
 
     // マウスの取り付け方向に応じて変更可能
-    x_scale_ = declare_parameter<double>("x_scale", 2.0);
+    x_scale_ = declare_parameter<double>("x_scale", 1.0);
 
     mouse_separation_m_ = declare_parameter<double>(
     "mouse_separation_m", 0.135);
