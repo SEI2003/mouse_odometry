@@ -90,7 +90,10 @@ public:
     x_scale_ = declare_parameter<double>("x_scale", 1.0);
 
     mouse_separation_m_ = declare_parameter<double>(
-    "mouse_separation_m", 0.135);
+    "mouse_separation_m", 0.065);
+
+    mouse_forward_offset_m_ = declare_parameter<double>(
+    "mouse_forward_offset_m", 0.170);
 
     // true の場合：マウス1が左、マウス2が右
     // false の場合：マウス1が右、マウス2が左
@@ -504,7 +507,7 @@ private:
     const double delta_x_body =
       (left_forward + right_forward) / 2.0;
 
-    const double delta_y_body =
+    const double delta_y_body_mouse =
       (m1_dx_m + m2_dx_m) / 2.0;
 
     // yaw変化量
@@ -516,6 +519,9 @@ private:
         (right_forward - left_forward) /
         mouse_separation_m_;
     }
+
+    const double delta_y_body =
+      delta_y_body_mouse - delta_yaw * mouse_forward_offset_m_;
 
     double pos_x;
     double pos_y;
@@ -651,6 +657,7 @@ private:
   double mouse_separation_m_;
   bool mouse1_is_left_;
   double yaw_sign_;
+  double mouse_forward_offset_m_;
 
   std::string frame_id_;
   std::string child_frame_id_;
