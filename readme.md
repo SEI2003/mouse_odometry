@@ -1,387 +1,243 @@
 # mouse_odometry
 
-2つの光学マウスを用いて、ROS 2 の `nav_msgs/msg/Odometry` として2次元オドメトリを出力するパッケージです。
+2台のPMW3901オプティカルフローセンサの微小移動量から、車体中心の平面運動 `Δx / Δy / Δyaw` を推定し、ROS 2 `nav_msgs/msg/Odometry` を `/mouse_odom` に出力するパッケージです。
 
-マウスの移動量を `/dev/input` から直接読み取り、2台の平均移動量から並進速度を計算します。
-また、2つのマウスを左右方向に一定距離離して設置することで、左右の移動量差からyaw角速度も推定します。
+## 現在の入力境界
 
-## Features
+このリポジトリを調査した時点では、PMW3901、MCU、Serial/UART、SPIのデータ取得コードや通信仕様は存在せず、Linux `/dev/input/event*` からUSBマウスを読むコードだけが存在していました。センサの実通信仕様を推測しないため、本パッケージはUART/SPIドライバを実装していません。
 
-* 2つのマウスから移動量を取得
-* `/dev/input/by-id/` からマウスデバイスを自動検出
-* `nav_msgs/msg/Odometry` を `/mouse_odom` に配信
-* マウス間距離からyaw角を推定
-* ROSサービスで位置・姿勢をリセット可能
-* `input` グループにユーザーを追加することで `sudo` なしで実行可能
-
-## Environment
-
-* Ubuntu 22.04
-* ROS 2 Humble
-* C++17
-* Linux input event device
-
-## ROS Interfaces
-
-### Published Topics
-
-| Topic         | Type                    | Description    |
-| ------------- | ----------------------- | -------------- |
-| `/mouse_odom` | `nav_msgs/msg/Odometry` | マウスから計算したオドメトリ |
-
-### Services
-
-| Service             | Type                 | Description    |
-| ------------------- | -------------------- | -------------- |
-| `/reset_mouse_odom` | `std_srvs/srv/Empty` | 位置とyaw角を0にリセット |
-
-## Coordinate Definition
-
-このノードでは、以下の座標系を前提としています。
+代わりに、入力取得と運動推定を次のように分離しています。
 
 ```text
-ROS座標系:
-  x : 前方向
-  y : 左方向
-  z : 上方向
-
-yaw:
-  反時計回りが正
+既存または今後のPMW3901ドライバ / MCUブリッジ
+  -> /pmw3901/left/flow, /pmw3901/right/flow
+  -> countの軸別校正・取付yaw補正
+  -> 2センサ最小二乗推定
+  -> /mouse_odom
 ```
 
-マウスの入力は以下のように扱います。
+入力型は `mouse_odometry/msg/Pmw3901Flow` です。
 
 ```text
-REL_Y : ロボットの前後方向
-REL_X : ロボットの左右方向
+std_msgs/Header header                 # 積算区間の終了時刻
+int32 delta_x_count                    # PMW3901センサX軸のraw差分
+int32 delta_y_count                    # PMW3901センサY軸のraw差分
+builtin_interfaces/Duration integration_time
+bool valid                             # 取得側が判断した観測の有効性
+bool quality_available                 # qualityを取得できたか
+uint16 quality                         # SQUAL等（取得できる場合のみ）
 ```
 
-2つのマウスを左右方向に離して取り付けた場合、yaw変化量は以下で計算します。
+`delta_*_count` は、直前のメッセージからの累積値ではなく、`integration_time` の区間だけで生じた差分です。`header.stamp` はその区間の終了時刻にしてください。2センサの積算区間を揃える責任は入力アダプタ側にもあります。header stampがゼロの場合はROS受信時刻を使いますが、正確な同期とreset後の古いキューデータ除去には送信元timestampが必要です。
+
+PMW3901のX/Y軸や符号はモジュール・取付方法・既存ファームウェアに依存するため、このREADMEでは決め打ちしません。実際の出力仕様を確認して校正値と取付角を設定してください。
+
+## 座標系とセンサ配置
+
+ROS標準の車体座標系を使います。
 
 ```text
-delta_yaw = (right_forward - left_forward) / mouse_separation_m
++x: 車両前方
++y: 車両左方向
++z: 上方向
++yaw: 上から見て反時計回り
 ```
 
-デフォルトのマウス間距離は `0.135 m` です。
-
-## Device Layout
-
-推奨配置は以下です。
+デフォルト位置は次のとおりです。
 
 ```text
-ロボット前方
-    ↑
-
-[左マウス] ---- 13.5 cm ---- [右マウス]
-
-    ↓
-ロボット後方
+left:  (x, y, z) = (0.220, +0.055, 0.282) m
+right: (x, y, z) = (0.220, -0.055, 0.282) m
 ```
 
-デフォルトでは、以下の前提になっています。
+`left_sensor_z` と `right_sensor_z` は車体のodom基準点から見た取付位置です。一方、`sensor_height_from_ground` はセンサと実際の路面との距離を記録する校正条件で、同じ値とは限りません。現在の推定式はzを使わず、`sensor_height_from_ground` による推測的な自動スケール補正式も実装していません。
+
+## countから車体座標の移動量へ
+
+USBマウスのCPI式は使用しません。各センサ・各軸を独立に実測校正します。
 
 ```text
-mouse1_is_left = true
+dx_sensor = delta_x_count * x_meter_per_count
+dy_sensor = delta_y_count * y_meter_per_count
 ```
 
-つまり、
+負の `meter_per_count` も設定できるため、確認済みの軸符号を表現できます。その後、取付yaw `alpha` で車体座標へ回転します。
 
 ```text
-mouse1 : 左側
-mouse2 : 右側
+dx_body_sensor = cos(alpha) * dx_sensor - sin(alpha) * dy_sensor
+dy_body_sensor = sin(alpha) * dx_sensor + cos(alpha) * dy_sensor
 ```
 
-として扱います。
+デフォルトの `1.0e-4 m/count` はビルド・接続確認用の仮値であり、正確な値ではありません。実機利用前に4軸すべてを校正してください。
 
-左右が逆の場合は、起動時に次のパラメータを変更してください。
+## 平面運動推定
 
-```bash
--p mouse1_is_left:=false
-```
-
-## Installation
-
-ワークスペースを作成します。
-
-```bash
-mkdir -p ~/mouse_ws/src
-cd ~/mouse_ws/src
-```
-
-このリポジトリを配置します。
-
-```bash
-git clone <your_repository_url>
-```
-
-ビルドします。
-
-```bash
-cd ~/mouse_ws
-colcon build --packages-select mouse_odometry --symlink-install
-source install/setup.bash
-```
-
-## Device Permission
-
-マウスは `/dev/input/eventXX` として認識されます。
-通常ユーザーのままだと、以下のように `Permission denied` が出る場合があります。
+位置 `(x_i, y_i)` の各センサ観測を、微小剛体運動モデル
 
 ```text
-open failed: Permission denied
+dx_i = dx - y_i * dtheta
+dy_i = dy + x_i * dtheta
 ```
 
-一時的に動かすだけなら、対象デバイスに読み取り権限を付与します。
-
-```bash
-sudo chmod a+r /dev/input/event16
-sudo chmod a+r /dev/input/event18
-```
-
-ただし、`event16` や `event18` はUSBの抜き差しや再起動で変わることがあります。
-
-恒久的に `sudo` なしで扱う場合は、ユーザーを `input` グループに追加します。
-
-```bash
-sudo usermod -aG input $USER
-```
-
-設定を反映するために、一度ログアウトして再ログインします。
-またはPCを再起動します。
-
-反映されているか確認します。
-
-```bash
-groups
-```
-
-出力に `input` が含まれていればOKです。
+に当てはめます。実装は対称配置専用式ではなく、次の一般行列をEigenの列ピボット付きQR分解で最小二乗します。
 
 ```text
-user25 adm cdrom sudo dip plugdev input lpadmin sambashare
+z = A u
+
+z = [left_dx, left_dy, right_dx, right_dy]^T
+u = [dx, dy, dtheta]^T
+
+A = [1  0  -left_y ]
+    [0  1   left_x ]
+    [1  0  -right_y]
+    [0  1   right_x]
+
+u = argmin ||A u - z||^2
+residual = ||A u - z||
 ```
 
-その後は、`sudo` なしでノードを起動できます。
+行列rankが3未満になるセンサ配置では起動を拒否します。デフォルト配置では、純粋yawにより両センサへ生じる同方向の `dy = 0.220 * dtheta` もモデル内で除去されます。
 
-```bash
-ros2 run mouse_odometry mouse_odom_node
-```
-
-## Mouse Device Check
-
-接続されている入力デバイスを確認します。
-
-```bash
-ls -l /dev/input/by-id/
-```
-
-例：
+受理した増分は中間yawでodom座標へ積算します。
 
 ```text
-usb-Logitech_USB_Optical_Mouse-event-mouse -> ../event18
-usb-Logitech_USB_Receiver-if01-event-mouse -> ../event16
-usb-Logitech_USB_Receiver-if01-event-kbd -> ../event15
+yaw_mid = yaw + dtheta / 2
+odom_x += dx * cos(yaw_mid) - dy * sin(yaw_mid)
+odom_y += dx * sin(yaw_mid) + dy * cos(yaw_mid)
+yaw = normalize(yaw + dtheta)
 ```
 
-このノードは `/dev/input/by-id/` 内の `event-mouse` で終わるデバイスだけを自動検出します。
-そのため、`event-kbd` のようなキーボードデバイスは除外されます。
+速度 `vx=dx/dt`, `vy=dy/dt`, `wz=dtheta/dt` はchild frame（車体座標）基準で格納します。
 
-## Usage
+## 有効性、同期、外れ値
 
-通常起動：
+両方の新しい観測が揃った場合だけ3DoF推定します。片方が停止・invalidの場合、その値をゼロ移動とは解釈せず、積算とOdometry publishを停止してWARNを出します。片側だけからyawを推定するfallbackはありません。
 
-```bash
-ros2 run mouse_odometry mouse_odom_node
-```
+観測は次の場合に棄却されます。
 
-マウス間距離を指定して起動：
+- `valid == false`
+- qualityが利用可能で `quality < minimum_quality`
+- `integration_time <= 0`
+- ROS受信から `sensor_timeout_sec` を超過
+- 左右timestamp差が `max_sensor_time_difference_sec` を超過
+- 左右積算時間差が `max_sensor_interval_difference_sec` を超過
+- 最小二乗残差が `max_motion_residual` を超過
+- `abs(vx)`, `abs(vy)`, `abs(wz)` が各速度上限を超過
 
-```bash
-ros2 run mouse_odometry mouse_odom_node --ros-args \
-  -p mouse_separation_m:=0.135
-```
+qualityが通信に存在しない場合は `quality_available=false` とし、値を捏造しないでください。その観測にはquality filterを適用しません。
 
-yawの符号が逆の場合：
+## ROSインターフェース
 
-```bash
-ros2 run mouse_odometry mouse_odom_node --ros-args \
-  -p yaw_sign:=-1.0
-```
+Published topics:
 
-マウス1とマウス2の左右が逆の場合：
+| Topic | Type | 内容 |
+| --- | --- | --- |
+| `/mouse_odom` | `nav_msgs/msg/Odometry` | 受理済み観測だけを積算したodom。TFはpublishしない |
+| `/mouse_odom/debug` | `mouse_odometry/msg/Pmw3901Debug` | raw count、変換後[m]、推定増分、residual、quality、valid、棄却理由 |
 
-```bash
-ros2 run mouse_odometry mouse_odom_node --ros-args \
-  -p mouse1_is_left:=false
-```
+Subscribed topics:
 
-手動でデバイスを指定する場合：
+| Default topic | Type |
+| --- | --- |
+| `/pmw3901/left/flow` | `mouse_odometry/msg/Pmw3901Flow` |
+| `/pmw3901/right/flow` | `mouse_odometry/msg/Pmw3901Flow` |
 
-```bash
-ros2 run mouse_odometry mouse_odom_node --ros-args \
-  -p auto_detect_devices:=false \
-  -p device_path_1:=/dev/input/by-id/usb-Logitech_USB_Optical_Mouse-event-mouse \
-  -p device_path_2:=/dev/input/by-id/usb-Logitech_USB_Receiver-if01-event-mouse
-```
+Service:
+
+| Service | Type | 内容 |
+| --- | --- | --- |
+| `/reset_mouse_odom` | `std_srvs/srv/Empty` | mutex内でx/y/yawと未処理の左右deltaをクリア |
+
+reset時刻以前のsource timestampを持つ遅延メッセージも棄却します。TFは意図的にpublishしません。
+
+`/mouse_odom` のデフォルトframeは `mouse_odom`、child frameは `mouse_base_link` です。poseは親frame、twistはchild frame基準です。共分散は現時点では固定の暫定値です。residualやqualityから動的共分散へ発展させる境界は一箇所にまとめていますが、未校正のモデルは追加していません。
 
 ## Parameters
 
-| Parameter             |           Default | Description                    |
-| --------------------- | ----------------: | ------------------------------ |
-| `auto_detect_devices` |            `true` | `/dev/input/by-id/` からマウスを自動検出 |
-| `device_path_1`       |              `""` | マウス1のデバイスパス                    |
-| `device_path_2`       |              `""` | マウス2のデバイスパス                    |
-| `cpi`                 |          `1000.0` | マウスのCPI                        |
-| `x_scale`             |             `1.0` | 左右方向のスケール補正                    |
-| `y_scale`             |            `0.92` | 前後方向のスケール補正                    |
-| `mouse_separation_m`  |           `0.135` | 左右マウス間の距離[m]                   |
-| `mouse1_is_left`      |            `true` | `true` の場合、マウス1を左側として扱う        |
-| `yaw_sign`            |             `1.0` | yaw方向の符号補正                     |
-| `publish_rate`        |            `10.0` | `/mouse_odom` の配信周期[Hz]        |
-| `frame_id`            |      `mouse_odom` | Odometryの親フレーム                 |
-| `child_frame_id`      | `mouse_base_link` | Odometryの子フレーム                 |
-| `grab_device`         |            `true` | 入力デバイスを排他的に取得する                |
+| Parameter | Default | 内容 |
+| --- | ---: | --- |
+| `left_sensor_x/y/z` | `0.220 / 0.055 / 0.282` | 左センサ位置[m] |
+| `right_sensor_x/y/z` | `0.220 / -0.055 / 0.282` | 右センサ位置[m] |
+| `left_sensor_yaw` | `0.0` | 左センサ軸から車体軸への回転[rad] |
+| `right_sensor_yaw` | `0.0` | 右センサ軸から車体軸への回転[rad] |
+| `left_x_meter_per_count` | `1.0e-4` | 左Xの仮換算値[m/count] |
+| `left_y_meter_per_count` | `1.0e-4` | 左Yの仮換算値[m/count] |
+| `right_x_meter_per_count` | `1.0e-4` | 右Xの仮換算値[m/count] |
+| `right_y_meter_per_count` | `1.0e-4` | 右Yの仮換算値[m/count] |
+| `sensor_height_from_ground` | `0.0` | 校正時の対地高さ[m]。情報保持のみ |
+| `minimum_quality` | `0` | qualityが存在する場合の下限 |
+| `sensor_timeout_sec` | `0.1` | ROS受信watchdog[s] |
+| `max_sensor_time_difference_sec` | `0.02` | 左右終了timestampの最大差[s] |
+| `max_sensor_interval_difference_sec` | `0.02` | 左右積算時間の最大差[s] |
+| `max_linear_speed` | `5.0` | 車体+x速度上限[m/s] |
+| `max_lateral_speed` | `5.0` | 車体+y速度上限[m/s] |
+| `max_angular_speed` | `10.0` | yaw角速度上限[rad/s] |
+| `max_motion_residual` | `0.01` | 4観測の最小二乗残差上限[m] |
+| `left_flow_topic` | `/pmw3901/left/flow` | 左入力topic |
+| `right_flow_topic` | `/pmw3901/right/flow` | 右入力topic |
+| `frame_id` | `mouse_odom` | Odometry親frame |
+| `child_frame_id` | `mouse_base_link` | Odometry子frame |
 
-## Topic Check
+速度・residual・quality閾値も、実測データから調整する必要があります。
 
-トピックが出ているか確認します。
+## ビルドと起動
+
+ROS 2 Humbleの例:
 
 ```bash
-ros2 topic list | grep mouse
+cd ~/mouse_ws
+source /opt/ros/humble/setup.bash
+colcon build --packages-select mouse_odometry --symlink-install
+source install/setup.bash
+ros2 run mouse_odometry mouse_odom_node --ros-args \
+  -p left_x_meter_per_count:=<calibrated_value> \
+  -p left_y_meter_per_count:=<calibrated_value> \
+  -p right_x_meter_per_count:=<calibrated_value> \
+  -p right_y_meter_per_count:=<calibrated_value> \
+  -p sensor_height_from_ground:=<calibration_height>
 ```
 
-Odometryの中身を確認します。
+これだけではPMW3901ハードウェアから値は届きません。実機の既存MCU/ドライバ仕様に従う入力アダプタが、左右の `Pmw3901Flow` をpublishする必要があります。
+
+確認:
 
 ```bash
 ros2 topic echo /mouse_odom
-```
-
-配信周期を確認します。
-
-```bash
-ros2 topic hz /mouse_odom
-```
-
-## Reset Odometry
-
-位置とyaw角をリセットします。
-
-```bash
+ros2 topic echo /mouse_odom/debug
 ros2 service call /reset_mouse_odom std_srvs/srv/Empty "{}"
 ```
 
-## Calibration
+## 実機キャリブレーション
 
-### 1. 前進方向の確認
+校正中は路面、照明、高さ、速度を実運用条件に固定し、raw countを `/mouse_odom/debug` または入力側ログで記録します。
 
-ロボットをまっすぐ前に動かします。
+1. X方向: yawを変えず、正確に例えば1.0 m前進します。左右各センサについて `実距離 / 累積X count` を計算し、各 `x_meter_per_count` に設定します。符号もこの試験で確定します。
+2. Y方向: 可能ならyawを変えず、既知距離だけ横移動します。左右各々の `実距離 / 累積Y count` を設定します。車体を正確に横移動できない場合、純粋なY校正は困難なので、治具やセンサ単体の直線ステージを使用してください。斜め移動をYだけの校正値へ混ぜないでください。
+3. 取付角: 車体軸に沿った直線移動で他方の軸へ現れる成分を確認し、`left_sensor_yaw` と `right_sensor_yaw` を調整します。軸の取り違えはyaw角だけでなく入力アダプタの実仕様と照合します。
+4. yaw: 90/180/360 degなど既知角度だけ回し、推定yawを比較します。yawだけを合わせるため実測したセンサ間距離を恣意的に変更せず、センサ位置、左右各軸scale、取付角、flowの追跡状態を切り分けます。
+5. 高さ依存: 同じ校正高さを `sensor_height_from_ground` に記録します。高さを変える場合は再校正してください。距離センサを将来追加するまでは自動補正されません。
 
-期待される値：
+## 数値テスト
 
-```text
-linear.x > 0
-linear.y ≒ 0
-angular.z ≒ 0
-```
+`test/test_planar_motion_estimator.cpp` に次を実装しています。
 
-もし `linear.x` が負になる場合は、`y_scale` の符号を反転します。
+| Test | 真値 `(dx, dy, dtheta)` | 理論観測 `(left_dx,left_dy,right_dx,right_dy)` | 期待結果 |
+| --- | --- | --- | --- |
+| A 直進 | `(0.100, 0, 0)` | `(0.100,0,0.100,0)` | `(0.100,0,0)` |
+| B 横滑り | `(0, 0.100, 0)` | `(0,0.100,0,0.100)` | `(0,0.100,0)` |
+| C 純粋yaw | `(0,0,0.100)` | `(-0.0055,0.022,+0.0055,0.022)` | `(0,0,0.100)` |
+| D 複合 | `(0.080,0.020,0.050)` | `(0.07725,0.031,0.08275,0.031)` | 元の真値 |
 
-```bash
--p y_scale:=-0.92
-```
-
-### 2. 左右方向の確認
-
-ロボットを真横に動かします。
-
-期待される値：
-
-```text
-linear.y が変化
-linear.x ≒ 0
-angular.z ≒ 0
-```
-
-左右の符号が逆の場合は、`x_scale` の符号を反転します。
+実行:
 
 ```bash
--p x_scale:=-1.0
+cd ~/mouse_ws
+colcon test --packages-select mouse_odometry
+colcon test-result --verbose
 ```
 
-### 3. yaw方向の確認
+## 前提と限界
 
-ロボットをその場で反時計回りに回転させます。
+PMW3901はオプティカルフローセンサであり、raw countは絶対的な実距離ではありません。精度は路面模様、センサと路面の距離、照明、振動、pitch/roll、個体差、速度、tracking lossに依存します。現在の2D odometryは平坦路面かつセンサ高さがほぼ一定という前提です。
 
-期待される値：
-
-```text
-angular.z > 0
-```
-
-もし `angular.z` が負になる場合は、`yaw_sign` を反転します。
-
-```bash
--p yaw_sign:=-1.0
-```
-
-### 4. マウス間距離の補正
-
-yaw角が実際より大きく出る場合は、`mouse_separation_m` を大きくします。
-
-```bash
--p mouse_separation_m:=0.145
-```
-
-yaw角が実際より小さく出る場合は、`mouse_separation_m` を小さくします。
-
-```bash
--p mouse_separation_m:=0.125
-```
-
-## Example Output
-
-`/mouse_odom` の例です。
-
-```yaml
-header:
-  frame_id: mouse_odom
-child_frame_id: mouse_base_link
-pose:
-  pose:
-    position:
-      x: -0.129
-      y: 0.077
-      z: 0.0
-    orientation:
-      x: 0.0
-      y: 0.0
-      z: 0.351
-      w: 0.936
-twist:
-  twist:
-    linear:
-      x: 0.000
-      y: 0.000
-      z: 0.0
-    angular:
-      x: 0.0
-      y: 0.0
-      z: 0.0
-```
-
-## Notes
-
-このノードは光学マウスの移動量をそのまま積算するため、床面の材質やマウスの接地状態に影響されます。
-
-精度を上げるには、以下の点に注意してください。
-
-* マウスを床面に安定して接地させる
-* 2つのマウスの向きをそろえる
-* マウス間距離を正確に測る
-* 滑りやすい床面を避ける
-* 実測距離に合わせて `x_scale` と `y_scale` を調整する
-* 実測角度に合わせて `mouse_separation_m` または `yaw_sign` を調整する
-
-## License
-
-Apache-2.0
+未解決なのは実機固有のPMW3901入力アダプタと通信仕様、4軸の実測scale、センサ軸の符号・取付角、qualityの実際の範囲、運用環境に適した閾値です。これらはリポジトリ内に根拠となるファームウェアや仕様がなかったため推測していません。
