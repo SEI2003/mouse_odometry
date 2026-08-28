@@ -22,6 +22,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
 )
 
 add_library(planar_motion_estimator
+  src/flow_validation.cpp
   src/planar_motion_estimator.cpp
 )
 target_include_directories(planar_motion_estimator PUBLIC
@@ -63,6 +64,11 @@ if(BUILD_TESTING)
     test/test_planar_motion_estimator.cpp
   )
   target_link_libraries(test_planar_motion_estimator planar_motion_estimator)
+
+  ament_add_gtest(test_flow_validation
+    test/test_flow_validation.cpp
+  )
+  target_link_libraries(test_flow_validation planar_motion_estimator)
 endif()
 
 ament_export_dependencies(eigen3_cmake_module Eigen3)

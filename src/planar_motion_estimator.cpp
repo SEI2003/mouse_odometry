@@ -2,10 +2,27 @@
 
 #include <Eigen/QR>
 
+#include <cmath>
 #include <stdexcept>
 
 namespace mouse_odometry
 {
+
+SensorDelta convertSensorDeltaToBody(
+  double raw_dx,
+  double raw_dy,
+  double x_meter_per_count,
+  double y_meter_per_count,
+  double sensor_yaw)
+{
+  const double sensor_x = raw_dx * x_meter_per_count;
+  const double sensor_y = raw_dy * y_meter_per_count;
+  const double cosine = std::cos(sensor_yaw);
+  const double sine = std::sin(sensor_yaw);
+  return {
+    cosine * sensor_x - sine * sensor_y,
+    sine * sensor_x + cosine * sensor_y};
+}
 
 PlanarMotionEstimator::PlanarMotionEstimator(
   const SensorPosition & left,
@@ -33,6 +50,9 @@ MotionEstimate PlanarMotionEstimator::estimate(
 
   const Eigen::Vector3d solution =
     observation_matrix_.colPivHouseholderQr().solve(observations);
+  // This residual only measures consistency with the observable rigid-motion
+  // subspace. In a two-sensor layout, certain one-sided X errors are exactly
+  // explainable as translation plus yaw and therefore have zero residual.
   const double residual =
     (observation_matrix_ * solution - observations).norm();
 

@@ -26,6 +26,13 @@ struct MotionEstimate
   double residual;
 };
 
+SensorDelta convertSensorDeltaToBody(
+  double raw_dx,
+  double raw_dy,
+  double x_meter_per_count,
+  double y_meter_per_count,
+  double sensor_yaw);
+
 class PlanarMotionEstimator
 {
 public:

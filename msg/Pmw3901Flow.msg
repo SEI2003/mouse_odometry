@@ -1,6 +1,8 @@
 # One PMW3901 delta accumulated over integration_time.
-# header.stamp is the end of that integration interval. The producer preserves
-# the sensor-axis convention; the odometry node applies calibration and yaw.
+# header.stamp is the measurement-end timestamp, not the transmission time.
+# Set it to zero only when the adapter cannot provide a measurement timestamp;
+# the odometry node then uses ROS receive time as an explicitly marked fallback.
+# The producer preserves the sensor-axis convention; the node calibrates it.
 std_msgs/Header header
 int32 delta_x_count
 int32 delta_y_count
