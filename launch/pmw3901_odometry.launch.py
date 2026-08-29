@@ -30,6 +30,12 @@ def generate_launch_description():
                 executable="mouse_odom_node",
                 name="mouse_odom_node",
                 output="screen",
+                parameters=[
+                    {
+                        "left_sensor_yaw": -1.57079632679,
+                        "right_sensor_yaw": -1.57079632679,
+                    }
+                ],
             ),
         ]
     )
