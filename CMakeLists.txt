@@ -1,4 +1,3 @@
-```cmake
 cmake_minimum_required(VERSION 3.8)
 
 project(mouse_odometry)
@@ -262,4 +261,3 @@ ament_export_dependencies(
 )
 
 ament_package()
-```
