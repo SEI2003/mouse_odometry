@@ -2,14 +2,13 @@
 
 2台のPMW3901オプティカルフローセンサの微小移動量から、車体中心の平面運動 `Δx / Δy / Δyaw` を推定し、ROS 2 `nav_msgs/msg/Odometry` を `/mouse_odom` に出力するパッケージです。
 
-## 現在の入力境界
+## 入力境界
 
-このリポジトリを調査した時点では、PMW3901、MCU、Serial/UART、SPIのデータ取得コードや通信仕様は存在せず、Linux `/dev/input/event*` からUSBマウスを読むコードだけが存在していました。センサの実通信仕様を推測しないため、本パッケージはUART/SPIドライバを実装していません。
-
-代わりに、入力取得と運動推定を次のように分離しています。
+入力取得と運動推定は次のように分離しています。`pmw3901_serial_bridge` がXIAO ESP32-C3のbinary packet v1をdecodeし、既存の`mouse_odom_node`へ左右のraw flowを渡します。平面運動推定、health判定、最小二乗、Odometry積算はBridgeに重複実装していません。
 
 ```text
-既存または今後のPMW3901ドライバ / MCUブリッジ
+PMW3901 x2 -> XIAO ESP32-C3 -> USB Serial binary v1
+  -> pmw3901_serial_bridge
   -> /pmw3901/left/flow, /pmw3901/right/flow
   -> countの軸別校正・取付yaw補正
   -> 2センサ最小二乗推定
@@ -20,6 +19,7 @@
 
 ```text
 std_msgs/Header header                 # 積算区間の終了時刻
+uint32 cycle_id                        # ESP32 sampling cycle ID
 int32 delta_x_count                    # PMW3901センサX軸のraw差分
 int32 delta_y_count                    # PMW3901センサY軸のraw差分
 builtin_interfaces/Duration integration_time
@@ -30,9 +30,86 @@ uint16 quality                         # SQUAL等（取得できる場合のみ�
 
 `delta_*_count` は、直前のメッセージからの累積値ではなく、`integration_time` の区間だけで生じた差分です。`header.stamp` の定義は **measurement end timestamp（積算区間終了時刻）** であり、measurement start、MCU送信時刻、ROS受信時刻ではありません。2センサの積算区間を揃える責任は入力アダプタ側にもあります。
 
-入力アダプタでmeasurement endを取得できない場合だけ、header stampをゼロにしてください。ノードはROS受信時刻へfallbackし、debugの `left/right_timestamp_is_receive_time` をtrueにします。この暫定方式では通信遅延差が同期誤差になり、reset前のキュー済みデータをsource timestampで判別できません。
+他の入力アダプタでmeasurement endを取得できない場合だけ、header stampをゼロにしてください。`pmw3901_serial_bridge`が正常同期している場合は、ESP measurement timestampをROS時間へ変換した非ゼロstampを必ず設定します。
 
 PMW3901のX/Y軸や符号はモジュール・取付方法・既存ファームウェアに依存するため、このREADMEでは決め打ちしません。実際の出力仕様を確認して校正値と取付角を設定してください。
+
+## PMW3901 Serial Bridge
+
+### Serialとpacket v1
+
+```bash
+ros2 run mouse_odometry pmw3901_serial_bridge --ros-args \
+  -p serial_port:=/dev/ttyACM0 \
+  -p serial_baud:=115200
+```
+
+外部Serial libraryは使用せず、Ubuntu 22.04のPOSIX `termios`でdeviceをraw、8N1、non-blockingに設定します。ROS wall timerが既定2 ms周期で`poll()`/`read()`し、node executorをblockしません。対応baudは9600、19200、38400、57600、115200と、OSが定義する場合の230400、460800、921600です。USB CDCではbaud設定が物理転送速度を直接決めない場合があります。
+
+wire packetは固定33 bytes、全multibyte fieldがlittle endianです。
+
+| Offset | Size | Field |
+| ---: | ---: | --- |
+| 0 | 2 | header `0xAA55`（wire `55 AA`） |
+| 2 | 1 | version `1` |
+| 3 | 4 | `cycle_id` |
+| 7 | 8 | ESP monotonic `timestamp_us` |
+| 15 | 4 | `measurement_interval_us` |
+| 19 / 21 / 23 / 24 | 2 / 2 / 1 / 1 | left dx / dy / SQUAL / status |
+| 25 / 27 / 29 / 30 | 2 / 2 / 1 / 1 | right dx / dy / SQUAL / status |
+| 31 | 2 | CRC |
+
+CRCはCRC-16/CCITT-FALSE（poly `0x1021`、init `0xFFFF`、RefIn/RefOut false、XorOut `0x0000`、`"123456789" -> 0x29B1`）です。offset 0〜30の31 bytesを計算し、末尾へlittle endianで格納します。CRC不一致packetはpublishしません。
+
+### Byte stream parserと再同期
+
+1回の`read()`とpacket境界は無関係です。内部bufferへ任意長のbyte列を追加し、`55 AA`を検索して33 bytesが揃うまで保持します。versionとCRCが正常なら`decodePacketV1()`で明示的にlittle endian decodeします。version/CRC失敗時はbuffer全体を捨てず、現在のheader候補から1 byteだけ進めて次のheaderを再検索します。garbage、packet分割、複数packet同時受信、破損packet直後の正常packetに対応します。
+
+### ESP timestampからROS timestampへの変換
+
+ESPの`timestamp_us`は`esp_timer_get_time()`由来の起動後monotonic時刻で、Unix/ROS時刻ではありません。CRC正常な初期packetからoffset候補を集めます。
+
+```text
+offset_i = ros_receive_time_i - esp_timestamp_i
+offset = minimum(offset_i)
+measurement_ros_time = esp_timestamp + offset
+```
+
+既定では最初の20 packetについて候補を集め、そのminimumを固定offsetとします。USB伝送遅延は正方向へ加わるため、最小候補を選ぶことで初回1 packet固定よりjitterの影響を抑えます。同期完了まではflowをpublishしません。以後の左右`Pmw3901Flow.header.stamp`には毎回のPC受信時刻ではなく、この変換済みmeasurement-end時刻を共通設定します。debugの`transport_delay_estimate_sec = receive_time - converted_measurement_time`はminimum候補を基準にした追加遅延で、絶対的なone-way USB delayではありません。
+
+`use_sim_time=true`でROS clockがまだ0の場合は同期せずpublishを抑止します。ROS clockが後退した場合は同期epochを作り直します。ESP timestampが前回より小さくなった場合はESP再起動としてclock offsetをresetし、そのpacketから新しいoffsetを確立します。cycle IDだけの`0xFFFFFFFF -> 0`はunsigned差分で連続と判断し、再起動にしません。
+
+### Drop、status、integration time
+
+連続する正常packetの`uint32_t cycle_id`差が2以上なら`difference - 1`をdrop数へ加算します。重複cycleと大きな逆行cycleはOdometryの二重積算を防ぐためpublishしません。
+
+```text
+quality_available = status & 0x20
+valid = (status & 0x01) && !(status & (0x08 | 0x10 | 0x40))
+```
+
+`SPI_ERROR`、`INIT_ERROR`、`OBSERVATION_ERROR`のいずれかがあれば、誤って`VALID`も立っていても安全側でfalseにします。SQUAL byteは`uint16 quality`へ拡張します。`measurement_interval_us`は秒とnanosecondへ分解し、左右に同じ`builtin_interfaces/Duration`を設定します。`measurement_interval_us=0` packetは、clock同期済みでpublish対象になった場合も左右`valid=false`とするため、既存validationでは積算されません。既定設定では最初の20 packetをclock同期に使い、その間はflow自体をpublishしません。
+
+packet v1では左右を同じcycleとして扱い、同じ`cycle_id`、measurement-end timestamp、integration timeを設定します。cycle IDはBridge内のdrop・重複・逆行検出に加え、`mouse_odom_node`のpair validationでも一致を必須とします。平面運動推定ロジック自体は変更しません。ただしESPではSPI逐次読出しのため、実際には微小なread時刻差があります。v1 packetにはそのoffsetが含まれていません。
+
+### Reconnectとdebug
+
+open失敗、`poll()` hangup、read errorではnodeを終了せずfd、parserの未処理byte、session/clock同期状態を閉じ、既定1秒間隔で再openします。再接続後は正常packetからoffset候補を集め直し、既定20 packetでclock offsetを再構築します。
+
+`/pmw3901/serial_debug`（`Pmw3901SerialDebug`）には接続状態、parser/CRC/version/resync/drop/duplicate統計、reconnect/ESP reboot数、現在のcycle/timestamp/interval/status、clock offset、同期状態、最終ROS受信時刻、変換済みmeasurement時刻、transport delay estimateを既定1 Hzでpublishします。
+
+| Parameter | Default | 内容 |
+| --- | ---: | --- |
+| `serial_port` | `/dev/ttyACM0` | XIAO USB Serial device |
+| `serial_baud` | `115200` | termios baud設定 |
+| `reconnect_interval_sec` | `1.0` | 再open周期 |
+| `io_poll_period_ms` | `2` | non-blocking I/O timer周期 |
+| `debug_publish_period_sec` | `1.0` | Serial debug publish周期 |
+| `clock_sync_sample_count` | `20` | minimum offset決定に使う初期packet数 |
+| `left_flow_topic` | `/pmw3901/left/flow` | 左publish topic |
+| `right_flow_topic` | `/pmw3901/right/flow` | 右publish topic |
+| `left_frame_id` | `pmw3901_left` | 左message frame |
+| `right_frame_id` | `pmw3901_right` | 右message frame |
 
 ## 座標系とセンサ配置
 
@@ -143,6 +220,7 @@ dt_motion = (left.integration_time + right.integration_time) / 2
 - `abs(raw_dx/raw_dy)` が設定上限を超過
 - scale・yaw変換後の値が非有限
 - 左右timestamp差が `max_sensor_time_difference_sec` を超過
+- 左右`cycle_id`が不一致
 - 左右積算時間差が `max_sensor_interval_difference_sec` を超過
 - 最小二乗残差が `max_motion_residual` を超過
 - `abs(vx)`, `abs(vy)`, `abs(wz)` が各速度上限を超過
@@ -167,6 +245,7 @@ qualityが通信に存在しない場合は `quality_available=false` とし、�
 | 9 | `REJECT_VELOCITY_OUTLIER` | vx/vy/wz上限超過 |
 | 10 | `REJECT_RESIDUAL_OUTLIER` | motion residual上限超過 |
 | 11 | `REJECT_SOURCE_INVALID` | 入力アダプタのvalidがfalse |
+| 12 | `REJECT_CYCLE_MISMATCH` | 左右cycle IDが不一致 |
 
 ## ROSインターフェース
 
@@ -175,7 +254,7 @@ Published topics:
 | Topic | Type | 内容 |
 | --- | --- | --- |
 | `/mouse_odom` | `nav_msgs/msg/Odometry` | 受理済み観測だけを積算したodom。TFはpublishしない |
-| `/mouse_odom/debug` | `mouse_odometry/msg/Pmw3901Debug` | raw/変換値、quality、左右・pair validity/reason、積算時間差、timestamp差、推定delta/速度、motion residual |
+| `/mouse_odom/debug` | `mouse_odometry/msg/Pmw3901Debug` | cycle ID/match、raw/変換値、quality、左右・pair validity/reason、積算時間差、timestamp差、推定delta/速度、motion residual |
 
 Subscribed topics:
 
@@ -224,11 +303,9 @@ reset時刻以前のsource timestampを持つ遅延メッセージも棄却し�
 
 raw・速度・motion residual・quality閾値は、実測データから調整する必要があります。
 
-## 将来のMCU同期取得
+## Packet v2候補
 
-理想構成はMCUが左右PMW3901を同一sampling cycleで読み、common measurement-end timestamp、common integration time、左右raw X/Y、左右valid、左右SQUALを一組として取得することです。
-
-今回はファームウェアとtransport仕様が未確定なので `Pmw3901FlowPair.msg` は追加していません。MCUブリッジが同じcommon timestampとintegration timeを左右の既存 `Pmw3901Flow` に設定すれば、現在の推定器は同一measurement windowとして扱えます。将来paired messageを追加しても、左右sampleを `validateFlowPair()` へ渡す境界だけを置き換えればよく、最小二乗・health判定・odom積算は変更不要です。
+v1は左右raw flowを同じcycleへまとめるため既存推定器へ安全に接続できます。将来v2には`session_id`、`sensor_read_offset_us`、左右個別measurement timestamp/integration time、shutter、overflow/saturation availability、firmware build IDを追加すると、再起動判定、逐次読出し補正、tracking診断を改善できます。version dispatchは`decodePacketV1()`から分離してあるため、既存v1を保ったまま追加できます。
 
 ## ビルドと起動
 
@@ -247,15 +324,28 @@ ros2 run mouse_odometry mouse_odom_node --ros-args \
   -p sensor_height_from_ground:=<calibration_height>
 ```
 
-これだけではPMW3901ハードウェアから値は届きません。実機の既存MCU/ドライバ仕様に従う入力アダプタが、左右の `Pmw3901Flow` をpublishする必要があります。
-
-確認:
+BridgeとOdometry nodeを同時に起動する場合:
 
 ```bash
+ros2 launch mouse_odometry pmw3901_odometry.launch.py \
+  serial_port:=/dev/ttyACM0 serial_baud:=115200
+```
+
+実機接続とtopic確認:
+
+```bash
+ls -l /dev/ttyACM*
+ros2 run mouse_odometry pmw3901_serial_bridge --ros-args \
+  -p serial_port:=/dev/ttyACM0 -p serial_baud:=115200
+ros2 topic echo /pmw3901/left/flow
+ros2 topic echo /pmw3901/right/flow
+ros2 topic echo /pmw3901/serial_debug
 ros2 topic echo /mouse_odom
 ros2 topic echo /mouse_odom/debug
 ros2 service call /reset_mouse_odom std_srvs/srv/Empty "{}"
 ```
+
+左右topicでは`cycle_id`、raw delta、quality/availability、valid、integration time、header stampを確認します。正常時は左右cycle IDが一致し、header stampがESP起動後数秒ではなく現在のROS時間系になっている必要があります。device権限がない場合は、運用環境に合わせてdialout groupまたはudev ruleを設定してください。
 
 ## 実機キャリブレーション
 
@@ -269,7 +359,7 @@ ros2 service call /reset_mouse_odom std_srvs/srv/Empty "{}"
 
 ## 数値テスト
 
-`test/test_planar_motion_estimator.cpp` と `test/test_flow_validation.cpp` に次を実装しています。
+`test/test_planar_motion_estimator.cpp`、`test/test_flow_validation.cpp`、`test/test_pmw3901_serial_protocol.cpp`に数値・validation・transport testを実装しています。
 
 | Test | 真値 `(dx, dy, dtheta)` | 理論観測 `(left_dx,left_dy,right_dx,right_dy)` | 期待結果 |
 | --- | --- | --- | --- |
@@ -286,6 +376,8 @@ ros2 service call /reset_mouse_odom std_srvs/srv/Empty "{}"
 
 E/Fは故障検出の成功テストではなく、**motion residualでは検出できない異常があることを仕様として固定するテスト**です。G〜Iはvalidation結果がinvalidになることを直接確認します。raw count上限超過の追加テストもあります。
 
+Serial/packet testは、正常33-byte decode、負int16 little-endian、CRC破損、分割入力、2 packet連結、先頭garbage、破損後の再同期、cycle drop、uint32 wrap、ESP→ROS時刻変換、初期minimum-offset推定、ESP timestamp巻戻り、status error優先を検証します。flow validationでは左右cycle mismatchを棄却し、同一cycleを受理することも確認します。
+
 実行:
 
 ```bash
@@ -294,12 +386,16 @@ colcon test --packages-select mouse_odometry
 colcon test-result --verbose
 ```
 
+## IMUを使用しないこと
+
+`/mouse_odom`のx/y/yawおよびvx/vy/wzは、左右PMW3901だけから`PlanarMotionEstimator`で算出します。このパッケージはIMU topicをsubscribeせず、gyro補正、EKF、姿勢補正、scale補正、IMUによるhealth判定を行いません。`sensor_msgs`や`robot_localization`への依存もありません。
+
 ## 前提と限界
 
 PMW3901はオプティカルフローセンサであり、raw countは絶対的な実距離ではありません。精度は路面模様、センサと路面の距離、照明、振動、pitch/roll、個体差、速度、tracking lossに依存します。現在の2D odometryは平坦路面かつセンサ高さがほぼ一定という前提です。
 
-未解決なのは実機固有のPMW3901入力アダプタと通信仕様、4軸の実測scale、センサ軸の符号・取付角、qualityの実際の範囲、運用環境に適した閾値です。これらはリポジトリ内に根拠となるファームウェアや仕様がなかったため推測していません。
+未解決なのは実機device名/権限、USB抜差し時のOS挙動、長時間のclock drift/transport jitter、4軸の実測scale、センサ軸の符号・取付角、qualityの実際の範囲、運用環境に適した閾値です。
 
-現在検出できるのは、停止・通信遅延、左右window不一致、入力側invalid、low SQUAL、raw上限超過、モデルと矛盾する観測成分、推定速度超過です。一方、実際の剛体運動と同じ観測部分空間へ入る片側X scale/tracking error、左右に共通するscale誤差、SQUALにも現れない緩やかなbiasは2センサflowだけでは識別困難です。IMU gyro z、車輪速、既知運動など独立情報との比較が必要です。
+現在検出できるのは、停止・通信遅延、cycle/window不一致、入力側invalid、low SQUAL、raw上限超過、モデルと矛盾する観測成分、推定速度超過です。一方、実際の剛体運動と同じ観測部分空間へ入る片側X scale/tracking error、左右に共通するscale誤差、SQUALにも現れない緩やかなbiasは2センサflowだけでは識別困難です。今回のOdometryへ別センサは一切融合していません。
 
-次にMCU側で必要なのは、共通sampling cycle ID、measurement-end timestamp、正確なintegration time、左右raw X/Y、左右SQUALとavailability、左右valid/ドライバエラー、overflow・saturation情報です。UART/SPIのwire formatは、実ファームウェア仕様が確定するまでこのパッケージでは定義しません。
+Serial Bridgeとv1 wire formatは実装済みです。固定offset方式はESPとPC clockの周波数差を補正しないため、長時間運転ではdriftを実測し、必要なら線形offset+skew推定へ拡張してください。

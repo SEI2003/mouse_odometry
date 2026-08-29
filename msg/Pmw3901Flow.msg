@@ -4,6 +4,7 @@
 # the odometry node then uses ROS receive time as an explicitly marked fallback.
 # The producer preserves the sensor-axis convention; the node calibrates it.
 std_msgs/Header header
+uint32 cycle_id
 int32 delta_x_count
 int32 delta_y_count
 builtin_interfaces/Duration integration_time

@@ -117,6 +117,7 @@ public:
 private:
   struct Sample
   {
+    uint32_t cycle_id{0};
     int32_t raw_dx{0};
     int32_t raw_dy{0};
     uint16_t quality{0};
@@ -190,6 +191,7 @@ private:
   {
     const rclcpp::Time receive_time = now();
     Sample sample;
+    sample.cycle_id = message.cycle_id;
     sample.raw_dx = message.delta_x_count;
     sample.raw_dy = message.delta_y_count;
     sample.quality = message.quality;
@@ -337,6 +339,7 @@ private:
     const SensorDelta & converted_delta) const
   {
     return FlowObservation{
+      sample.cycle_id,
       sample.raw_dx,
       sample.raw_dy,
       converted_delta.x,
@@ -382,6 +385,9 @@ private:
     debug.header.stamp = left_sample_.stamp > right_sample_.stamp ?
       left_sample_.stamp : right_sample_.stamp;
     debug.header.frame_id = child_frame_id_;
+    debug.left_cycle_id = left_sample_.cycle_id;
+    debug.right_cycle_id = right_sample_.cycle_id;
+    debug.cycle_match = validation.cycles_match;
     debug.left_raw_dx_count = left_sample_.raw_dx;
     debug.left_raw_dy_count = left_sample_.raw_dy;
     debug.right_raw_dx_count = right_sample_.raw_dx;

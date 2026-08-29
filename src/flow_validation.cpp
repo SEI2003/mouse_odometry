@@ -33,6 +33,8 @@ const char * rejectReasonName(RejectReason reason)
       return "motion_residual_outlier";
     case RejectReason::kSourceInvalid:
       return "source_invalid";
+    case RejectReason::kCycleMismatch:
+      return "cycle_mismatch";
     default:
       return "unknown";
   }
@@ -99,6 +101,7 @@ PairValidity validateFlowPair(
     left.measurement_end_time_sec - right.measurement_end_time_sec);
   result.integration_time_difference_sec = std::abs(
     left.integration_time_sec - right.integration_time_sec);
+  result.cycles_match = left.cycle_id == right.cycle_id;
   result.timestamps_match = std::isfinite(result.measurement_time_difference_sec) &&
     result.measurement_time_difference_sec <= limits.max_sensor_time_difference_sec;
   result.integration_times_match =
@@ -110,6 +113,8 @@ PairValidity validateFlowPair(
     result.reject_reason = result.left.reject_reason;
   } else if (!result.right.valid) {
     result.reject_reason = result.right.reject_reason;
+  } else if (!result.cycles_match) {
+    result.reject_reason = RejectReason::kCycleMismatch;
   } else if (!result.timestamps_match) {
     result.reject_reason = RejectReason::kTimeMismatch;
   } else if (!result.integration_times_match) {

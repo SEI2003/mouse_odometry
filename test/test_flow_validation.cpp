@@ -10,6 +10,7 @@ namespace
 mouse_odometry::FlowObservation validObservation()
 {
   mouse_odometry::FlowObservation observation;
+  observation.cycle_id = 42;
   observation.raw_dx = 100;
   observation.raw_dy = 0;
   observation.converted_dx = 0.100;
@@ -144,6 +145,29 @@ TEST(FlowValidation, RejectsSourceInvalid)
   const auto result = mouse_odometry::validateFlowPair(left, right, 10.002, limits());
   EXPECT_FALSE(result.valid);
   EXPECT_EQ(result.left.reject_reason, mouse_odometry::RejectReason::kSourceInvalid);
+}
+
+TEST(FlowValidation, TestLRejectsCycleMismatchBeforeOdometryIntegration)
+{
+  auto left = validObservation();
+  auto right = validObservation();
+  right.cycle_id = left.cycle_id + 1U;
+
+  const auto result = mouse_odometry::validateFlowPair(left, right, 10.002, limits());
+  EXPECT_FALSE(result.valid);
+  EXPECT_FALSE(result.cycles_match);
+  EXPECT_EQ(result.reject_reason, mouse_odometry::RejectReason::kCycleMismatch);
+}
+
+TEST(FlowValidation, TestMAcceptsMatchingCycles)
+{
+  const auto left = validObservation();
+  const auto right = validObservation();
+
+  const auto result = mouse_odometry::validateFlowPair(left, right, 10.002, limits());
+  EXPECT_TRUE(result.valid);
+  EXPECT_TRUE(result.cycles_match);
+  EXPECT_EQ(result.reject_reason, mouse_odometry::RejectReason::kNone);
 }
 
 }  // namespace

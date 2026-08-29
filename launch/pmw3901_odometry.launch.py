@@ -1,0 +1,35 @@
+from launch import LaunchDescription
+from launch.actions import DeclareLaunchArgument
+from launch.substitutions import LaunchConfiguration
+from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
+
+
+def generate_launch_description():
+    serial_port = LaunchConfiguration("serial_port")
+    serial_baud = LaunchConfiguration("serial_baud")
+
+    return LaunchDescription(
+        [
+            DeclareLaunchArgument("serial_port", default_value="/dev/ttyACM0"),
+            DeclareLaunchArgument("serial_baud", default_value="115200"),
+            Node(
+                package="mouse_odometry",
+                executable="pmw3901_serial_bridge",
+                name="pmw3901_serial_bridge",
+                output="screen",
+                parameters=[
+                    {
+                        "serial_port": serial_port,
+                        "serial_baud": ParameterValue(serial_baud, value_type=int),
+                    }
+                ],
+            ),
+            Node(
+                package="mouse_odometry",
+                executable="mouse_odom_node",
+                name="mouse_odom_node",
+                output="screen",
+            ),
+        ]
+    )

@@ -10,8 +10,12 @@ uint8 REJECT_RAW_DELTA_OUTLIER=8
 uint8 REJECT_VELOCITY_OUTLIER=9
 uint8 REJECT_RESIDUAL_OUTLIER=10
 uint8 REJECT_SOURCE_INVALID=11
+uint8 REJECT_CYCLE_MISMATCH=12
 
 std_msgs/Header header
+uint32 left_cycle_id
+uint32 right_cycle_id
+bool cycle_match
 int32 left_raw_dx_count
 int32 left_raw_dy_count
 int32 right_raw_dx_count

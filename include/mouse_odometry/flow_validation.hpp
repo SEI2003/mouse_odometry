@@ -20,12 +20,14 @@ enum class RejectReason : uint8_t
   kVelocityOutlier = 9,
   kResidualOutlier = 10,
   kSourceInvalid = 11,
+  kCycleMismatch = 12,
 };
 
 const char * rejectReasonName(RejectReason reason);
 
 struct FlowObservation
 {
+  uint32_t cycle_id{0};
   int32_t raw_dx{0};
   int32_t raw_dy{0};
   double converted_dx{0.0};
@@ -66,6 +68,7 @@ struct PairValidity
 {
   SensorValidity left;
   SensorValidity right;
+  bool cycles_match{false};
   bool timestamps_match{false};
   bool integration_times_match{false};
   bool valid{false};

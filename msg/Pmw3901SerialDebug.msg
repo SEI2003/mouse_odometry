@@ -1,0 +1,29 @@
+std_msgs/Header header
+
+bool serial_connected
+uint64 packet_received_total
+uint64 packet_valid_total
+uint64 crc_error_count
+uint64 header_resync_count
+uint64 version_error_count
+uint64 packet_drop_count
+uint64 duplicate_packet_count
+uint64 out_of_order_packet_count
+uint64 serial_reconnect_count
+uint64 esp_reboot_count
+
+uint32 current_cycle_id
+uint64 current_esp_timestamp_us
+uint32 measurement_interval_us
+
+float64 clock_offset_sec
+bool clock_sync_valid
+uint32 clock_sync_samples_collected
+uint32 clock_sync_samples_required
+
+builtin_interfaces/Time last_ros_receive_time
+builtin_interfaces/Time last_measurement_ros_time
+float64 transport_delay_estimate_sec
+
+uint8 left_status
+uint8 right_status
