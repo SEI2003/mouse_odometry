@@ -14,6 +14,7 @@
 #include "mouse_odometry/msg/pmw3901_debug.hpp"
 #include "mouse_odometry/msg/pmw3901_flow.hpp"
 #include "mouse_odometry/planar_motion_estimator.hpp"
+#include "geometry_msgs/msg/pose2_d.hpp"
 #include "nav_msgs/msg/odometry.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "std_srvs/srv/empty.hpp"
@@ -77,6 +78,7 @@ public:
       SensorPosition{right_sensor_x_, right_sensor_y_});
 
     odom_pub_ = create_publisher<nav_msgs::msg::Odometry>("/mouse_odom", 10);
+    pose2d_pub_ = create_publisher<geometry_msgs::msg::Pose2D>("/mouse_odom/pose2d", 10);
     debug_pub_ = create_publisher<msg::Pmw3901Debug>("/mouse_odom/debug", 10);
 
     left_sub_ = create_subscription<msg::Pmw3901Flow>(
@@ -467,6 +469,15 @@ private:
     debug_pub_->publish(output.debug);
     if (output.odometry.has_value()) {
       odom_pub_->publish(*output.odometry);
+
+      geometry_msgs::msg::Pose2D pose2d;
+      pose2d.x = output.odometry->pose.pose.position.x;
+      pose2d.y = output.odometry->pose.pose.position.y;
+
+      const auto & q = output.odometry->pose.pose.orientation;
+      pose2d.theta = 2.0 * std::atan2(q.z, q.w);
+
+      pose2d_pub_->publish(pose2d);
     }
     if (output.warn) {
       RCLCPP_WARN_THROTTLE(
@@ -562,6 +573,7 @@ private:
   std::unique_ptr<PlanarMotionEstimator> estimator_;
 
   rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr odom_pub_;
+  rclcpp::Publisher<geometry_msgs::msg::Pose2D>::SharedPtr pose2d_pub_;
   rclcpp::Publisher<msg::Pmw3901Debug>::SharedPtr debug_pub_;
   rclcpp::Subscription<msg::Pmw3901Flow>::SharedPtr left_sub_;
   rclcpp::Subscription<msg::Pmw3901Flow>::SharedPtr right_sub_;

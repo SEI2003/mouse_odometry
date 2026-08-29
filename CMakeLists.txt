@@ -13,7 +13,7 @@ endif()
 find_package(ament_cmake REQUIRED)
 
 find_package(builtin_interfaces REQUIRED)
-
+find_package(geometry_msgs REQUIRED)
 find_package(eigen3_cmake_module REQUIRED)
 find_package(Eigen3 REQUIRED)
 
@@ -130,6 +130,7 @@ add_executable(mouse_odom_node
 )
 
 ament_target_dependencies(mouse_odom_node
+  geometry_msgs
   nav_msgs
   rclcpp
   std_msgs
