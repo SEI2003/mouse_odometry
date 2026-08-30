@@ -15,7 +15,7 @@ SensorDelta convertSensorDeltaToBody(
   double y_meter_per_count,
   double sensor_yaw)
 {
-  const double sensor_x = raw_dx * x_meter_per_count;
+  const double sensor_x = -raw_dx * x_meter_per_count;
   const double sensor_y = raw_dy * y_meter_per_count;
   const double cosine = std::cos(sensor_yaw);
   const double sine = std::sin(sensor_yaw);
