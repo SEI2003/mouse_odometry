@@ -1,7 +1,11 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdlib>
 #include <cstdint>
+#include <ctime>
+#include <filesystem>
+#include <fstream>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -79,6 +83,7 @@ public:
       declare_parameter<std::string>("child_frame_id", "mouse_base_link");
 
     validateParameters();
+    initializeSensorXYLog();
 
     // センサー位置は、2点の移動量から車体の並進量と旋回量を解くために使う。
     estimator_ = std::make_unique<PlanarMotionEstimator>(
@@ -203,6 +208,53 @@ private:
            static_cast<double>(duration.nanosec) * 1.0e-9;
   }
 
+  void initializeSensorXYLog()
+  {
+    const char * home = std::getenv("HOME");
+    if (home == nullptr || home[0] == '\0') {
+      throw std::runtime_error("HOME is not set; cannot create PMW3901 XY log");
+    }
+
+    const std::filesystem::path log_directory = std::filesystem::path(home) / ".ros";
+    std::filesystem::create_directories(log_directory);
+
+    const std::time_t current_time = std::time(nullptr);
+    std::tm local_time{};
+    if (localtime_r(&current_time, &local_time) == nullptr) {
+      throw std::runtime_error("Failed to create timestamp for PMW3901 XY log");
+    }
+
+    char filename[40];
+    if (std::strftime(
+        filename, sizeof(filename), "pmw3901_xy_%Y%m%d_%H%M%S.csv", &local_time) == 0)
+    {
+      throw std::runtime_error("Failed to format PMW3901 XY log filename");
+    }
+
+    sensor_xy_log_path_ = (log_directory / filename).string();
+    sensor_xy_log_.open(sensor_xy_log_path_, std::ios::out | std::ios::trunc);
+    if (!sensor_xy_log_.is_open()) {
+      throw std::runtime_error("Failed to open PMW3901 XY log: " + sensor_xy_log_path_);
+    }
+
+    sensor_xy_log_ << "left_x,left_y,right_x,right_y\n";
+    RCLCPP_INFO(get_logger(), "PMW3901 XY log: %s", sensor_xy_log_path_.c_str());
+  }
+
+  // cycle_idが一致した左右サンプルの生カウント値だけを記録する。
+  // 100 Hz動作時のI/O負荷を抑えるため、データ100行ごとにflushする。
+  void writeSensorXYLogLocked()
+  {
+    sensor_xy_log_ <<
+      left_sample_.raw_dx << ',' << left_sample_.raw_dy << ',' <<
+      right_sample_.raw_dx << ',' << right_sample_.raw_dy << '\n';
+
+    ++sensor_xy_log_rows_;
+    if (sensor_xy_log_rows_ % 100 == 0) {
+      sensor_xy_log_.flush();
+    }
+  }
+
   // 左右どちらかのflowメッセージを内部形式へ変換し、ペア処理を試みる。
   void handleFlow(bool is_left, const msg::Pmw3901Flow & message)
   {
@@ -263,6 +315,10 @@ private:
   {
     if (!left_sample_.pending || !right_sample_.pending) {
       return std::nullopt;
+    }
+
+    if (left_sample_.cycle_id == right_sample_.cycle_id) {
+      writeSensorXYLogLocked();
     }
 
     const SensorDelta left_delta = convertSensorDeltaToBody(
@@ -594,6 +650,9 @@ private:
   std::string right_topic_;
   std::string frame_id_;
   std::string child_frame_id_;
+  std::ofstream sensor_xy_log_;
+  std::string sensor_xy_log_path_;
+  std::size_t sensor_xy_log_rows_{0};
 
   // 積算した2次元姿勢。data_mutex_で左右サンプルとまとめて保護する。
   double pos_x_{0.0};
