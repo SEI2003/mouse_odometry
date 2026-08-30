@@ -81,9 +81,15 @@ public:
     frame_id_ = declare_parameter<std::string>("frame_id", "mouse_odom");
     child_frame_id_ =
       declare_parameter<std::string>("child_frame_id", "mouse_base_link");
+    enable_xy_log_ = declare_parameter<bool>("enable_xy_log", false);
 
     validateParameters();
-    initializeSensorXYLog();
+
+    if (enable_xy_log_) {
+      initializeSensorXYLog();
+    } else {
+      RCLCPP_INFO(get_logger(), "PMW3901 XY logging disabled");
+    }
 
     // センサー位置は、2点の移動量から車体の並進量と旋回量を解くために使う。
     estimator_ = std::make_unique<PlanarMotionEstimator>(
@@ -317,7 +323,10 @@ private:
       return std::nullopt;
     }
 
-    if (left_sample_.cycle_id == right_sample_.cycle_id) {
+    if (
+      enable_xy_log_ &&
+      left_sample_.cycle_id == right_sample_.cycle_id)
+    {
       writeSensorXYLogLocked();
     }
 
@@ -650,6 +659,7 @@ private:
   std::string right_topic_;
   std::string frame_id_;
   std::string child_frame_id_;
+  bool enable_xy_log_;
   std::ofstream sensor_xy_log_;
   std::string sensor_xy_log_path_;
   std::size_t sensor_xy_log_rows_{0};

@@ -8,11 +8,13 @@ from launch_ros.parameter_descriptions import ParameterValue
 def generate_launch_description():
     serial_port = LaunchConfiguration("serial_port")
     serial_baud = LaunchConfiguration("serial_baud")
+    enable_xy_log = LaunchConfiguration("enable_xy_log")
 
     return LaunchDescription(
         [
             DeclareLaunchArgument("serial_port", default_value="/dev/ttyACM0"),
             DeclareLaunchArgument("serial_baud", default_value="115200"),
+            DeclareLaunchArgument("enable_xy_log", default_value="false"),
             Node(
                 package="mouse_odometry",
                 executable="pmw3901_serial_bridge",
@@ -34,6 +36,9 @@ def generate_launch_description():
                     {
                         "left_sensor_yaw": -1.57079632679,
                         "right_sensor_yaw": -1.57079632679,
+                        "enable_xy_log": ParameterValue(
+                            enable_xy_log, value_type=bool
+                        ),
                     }
                 ],
             ),
