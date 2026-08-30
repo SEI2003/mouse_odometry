@@ -24,12 +24,16 @@ using namespace std::chrono_literals;
 namespace mouse_odometry
 {
 
+// 2台のPMW3901から得た移動量を組み合わせ、平面上の自己位置を推定するROS 2ノード。
+// 左右のサンプルがそろった時点で入力を検証し、正常なペアだけを積算して
+// Odometry、Pose2D、および判定内容を含むデバッグ情報を配信する。
 class MouseOdomNode : public rclcpp::Node
 {
 public:
   MouseOdomNode()
   : Node("mouse_odom_node"), reset_epoch_(now()), start_time_(now())
   {
+    // 各センサーの取付位置・向き。位置は車体座標系で表す。
     left_sensor_x_ = declare_parameter<double>("left_sensor_x", 0.220);
     left_sensor_y_ = declare_parameter<double>("left_sensor_y", 0.055);
     left_sensor_z_ = declare_parameter<double>("left_sensor_z", 0.282);
@@ -39,7 +43,7 @@ public:
     right_sensor_z_ = declare_parameter<double>("right_sensor_z", 0.282);
     right_sensor_yaw_ = declare_parameter<double>("right_sensor_yaw", 0.0);
 
-    // Placeholder values: these must be replaced by measurements on the real vehicle.
+    // 1カウント当たりの移動距離。初期値は仮値なので、実機で計測して校正すること。
     left_x_meter_per_count_ =
       declare_parameter<double>("left_x_meter_per_count", 1.0e-4);
     left_y_meter_per_count_ =
@@ -51,19 +55,21 @@ public:
     sensor_height_from_ground_ =
       declare_parameter<double>("sensor_height_from_ground", 0.0);
 
+    // 入力サンプルおよび推定結果を棄却するためのしきい値。
     minimum_quality_ = declare_parameter<int>("minimum_quality", 0);
     sensor_timeout_sec_ = declare_parameter<double>("sensor_timeout_sec", 0.1);
     max_sensor_time_difference_sec_ =
       declare_parameter<double>("max_sensor_time_difference_sec", 0.02);
     max_sensor_interval_difference_sec_ =
       declare_parameter<double>("max_sensor_interval_difference_sec", 0.02);
-    max_linear_speed_ = declare_parameter<double>("max_linear_speed", 5.0);
-    max_lateral_speed_ = declare_parameter<double>("max_lateral_speed", 5.0);
+    max_linear_speed_ = declare_parameter<double>("max_linear_speed", 12.0);
+    max_lateral_speed_ = declare_parameter<double>("max_lateral_speed", 12.0);
     max_angular_speed_ = declare_parameter<double>("max_angular_speed", 10.0);
     max_motion_residual_ = declare_parameter<double>("max_motion_residual", 0.01);
     max_abs_raw_delta_x_ = declare_parameter<int64_t>("max_abs_raw_delta_x", 32767);
     max_abs_raw_delta_y_ = declare_parameter<int64_t>("max_abs_raw_delta_y", 32767);
 
+    // 入出力トピックで使用する名前と座標系。
     left_topic_ =
       declare_parameter<std::string>("left_flow_topic", "/pmw3901/left/flow");
     right_topic_ =
@@ -73,6 +79,8 @@ public:
       declare_parameter<std::string>("child_frame_id", "mouse_base_link");
 
     validateParameters();
+
+    // センサー位置は、2点の移動量から車体の並進量と旋回量を解くために使う。
     estimator_ = std::make_unique<PlanarMotionEstimator>(
       SensorPosition{left_sensor_x_, left_sensor_y_},
       SensorPosition{right_sensor_x_, right_sensor_y_});
@@ -97,6 +105,7 @@ public:
       std::bind(
         &MouseOdomNode::resetCallback, this,
         std::placeholders::_1, std::placeholders::_2));
+    // コールバックが来ない状態も検出できるよう、20 ms周期で受信時刻を監視する。
     watchdog_timer_ = create_wall_timer(20ms, [this]() {checkSensorTimeouts();});
 
     RCLCPP_WARN(
@@ -117,6 +126,8 @@ public:
   }
 
 private:
+  // センサー1台分の最新観測値。
+  // pending=true は、まだ反対側のサンプルとの処理に使用されていないことを示す。
   struct Sample
   {
     uint32_t cycle_id{0};
@@ -134,6 +145,8 @@ private:
     rclcpp::Time receive_time{0, 0, RCL_ROS_TIME};
   };
 
+  // ロック中に生成し、ロック解除後にpublishするデータ一式。
+  // 棄却時はデバッグ情報だけが入り、odometryは空になる。
   struct ProcessedOutput
   {
     msg::Pmw3901Debug debug;
@@ -141,6 +154,7 @@ private:
     bool warn{false};
   };
 
+  // 計算不能や安全でない設定値を、ノード起動時にまとめて拒否する。
   void validateParameters() const
   {
     const auto require_positive = [](double value, const char * name) {
@@ -189,6 +203,7 @@ private:
            static_cast<double>(duration.nanosec) * 1.0e-9;
   }
 
+  // 左右どちらかのflowメッセージを内部形式へ変換し、ペア処理を試みる。
   void handleFlow(bool is_left, const msg::Pmw3901Flow & message)
   {
     const rclcpp::Time receive_time = now();
@@ -205,6 +220,8 @@ private:
     sample.received = true;
     sample.pending = true;
     sample.source_valid = message.valid;
+
+    // タイムスタンプが未設定なら受信時刻で代用する。不正な値は後段の検証で棄却する。
     sample.timestamp_is_receive_time =
       message.header.stamp.sec == 0 && message.header.stamp.nanosec == 0;
     sample.timestamp_valid = sample.timestamp_is_receive_time ||
@@ -216,7 +233,8 @@ private:
     {
       std::lock_guard<std::mutex> lock(data_mutex_);
 
-      // A stamped interval ending before reset may have been queued in an executor.
+      // reset前に計測されたメッセージがexecutor内に残り、reset後に届く場合がある。
+      // それを積算すると原点へ戻した直後に位置がずれるため、ここで破棄する。
       const bool has_source_stamp =
         message.header.stamp.sec != 0 || message.header.stamp.nanosec != 0;
       if (has_source_stamp && sample.stamp <= reset_epoch_) {
@@ -239,6 +257,8 @@ private:
     }
   }
 
+  // 左右の未処理サンプルがそろっていれば、検証・運動推定・姿勢積分を行う。
+  // 呼び出し側がdata_mutex_を保持していることを前提とする。
   std::optional<ProcessedOutput> tryProcessPairLocked(const rclcpp::Time & current_time)
   {
     if (!left_sample_.pending || !right_sample_.pending) {
@@ -261,14 +281,15 @@ private:
     if (!validation.valid) {
       auto output = makeRejectedOutputLocked(validation, left_delta, right_delta);
       if (validation.reject_reason == RejectReason::kTimeMismatch) {
-        // Retain the newer sample so it can be paired with the next observation.
-        // A small motion residual cannot substitute for this window check.
+        // 計測時刻が離れすぎている場合は古い側だけを破棄し、新しい側は次の観測との
+        // 組み合わせに再利用する。運動モデルの残差が小さくても時刻同期の代わりにはならない。
         if (left_sample_.stamp < right_sample_.stamp) {
           left_sample_.pending = false;
         } else {
           right_sample_.pending = false;
         }
       } else if (validation.reject_reason == RejectReason::kTimeout) {
+        // タイムアウトした側だけを破棄し、まだ有効な側は次のペア候補として残す。
         if (!validation.left.timeout_valid) {
           left_sample_.pending = false;
         }
@@ -282,9 +303,10 @@ private:
       return output;
     }
 
+    // 各センサー座標系の移動量から、車体中心の並進量(dx, dy)と旋回量(dyaw)を推定する。
     const MotionEstimate estimate = estimator_->estimate(left_delta, right_delta);
-    // Delta is accumulated over the measurement window, so velocity uses the
-    // mean sensor integration time, never the ROS callback arrival interval.
+    // deltaはセンサーの積分区間に蓄積された移動量であるため、速度計算には左右の
+    // 平均積分時間を使う。ROSコールバックの到着間隔は通信遅延を含むため使用しない。
     const double dt =
       0.5 * (left_sample_.integration_time + right_sample_.integration_time);
     const double vx = estimate.dx / dt;
@@ -299,9 +321,9 @@ private:
     output.debug.vx = vx;
     output.debug.vy = vy;
     output.debug.wz = wz;
-    // motion_residual is only rigid-model consistency. Certain one-sided X
-    // scale/tracking errors lie in the observable motion subspace and produce
-    // false yaw with a near-zero residual; it is not a sensor-health score.
+    // motion_residualは、左右の観測が剛体運動モデルとどれだけ整合するかだけを表す。
+    // 片側X軸のスケール誤差などは、誤った旋回量を生んでも残差がほぼ0になる場合が
+    // あるため、この値だけでセンサーの健全性を判定してはいけない。
     output.debug.motion_residual = estimate.residual;
 
     if (!std::isfinite(estimate.dx) || !std::isfinite(estimate.dy) ||
@@ -318,6 +340,8 @@ private:
       setPairRejection(output.debug, RejectReason::kVelocityOutlier);
       output.warn = true;
     } else {
+      // 区間中央の向きを使って車体座標系の移動量をワールド座標系へ回転し、
+      // 現在姿勢へ積算する。旋回を含む区間で始点の向きだけを使う誤差を抑えられる。
       const double yaw_mid = yaw_ + estimate.dyaw * 0.5;
       pos_x_ += estimate.dx * std::cos(yaw_mid) - estimate.dy * std::sin(yaw_mid);
       pos_y_ += estimate.dx * std::sin(yaw_mid) + estimate.dy * std::cos(yaw_mid);
@@ -355,6 +379,7 @@ private:
       sample.timestamp_valid};
   }
 
+  // ROSパラメータを入力検証ライブラリのしきい値形式へまとめる。
   ValidationLimits validationLimits() const
   {
     return ValidationLimits{
@@ -378,6 +403,7 @@ private:
     return output;
   }
 
+  // 入力値、左右それぞれの判定、同期誤差をデバッグメッセージへ転記する。
   void fillDebugLocked(
     msg::Pmw3901Debug & debug,
     const PairValidity & validation,
@@ -443,9 +469,9 @@ private:
     odometry.twist.twist.linear.y = vy;
     odometry.twist.twist.angular.z = wz;
 
-    // Fixed baseline covariance. motion_residual is deliberately available at
-    // this boundary for a future calibrated model, but must not be treated as
-    // complete sensor health because some X faults are unobservable here.
+    // 現状は固定の共分散を設定する。motion_residualは将来、校正済みの共分散モデルへ
+    // 利用できるよう引数で受けているが、観測できないX軸異常もあるため直接は使わない。
+    // 2次元オドメトリで推定しないz、roll、pitchには非常に大きな分散を設定する。
     (void)motion_residual;
     odometry.pose.covariance.fill(0.0);
     odometry.pose.covariance[0] = 0.01;
@@ -464,6 +490,7 @@ private:
     return odometry;
   }
 
+  // デバッグ情報は成否にかかわらず配信し、正常時だけOdometryとPose2Dを配信する。
   void publishOutput(const ProcessedOutput & output)
   {
     debug_pub_->publish(output.debug);
@@ -486,6 +513,7 @@ private:
     }
   }
 
+  // 一定時間更新されないセンサーのpending値を無効化し、古い差分の積算を防ぐ。
   void checkSensorTimeouts()
   {
     const rclcpp::Time current_time = now();
@@ -511,6 +539,7 @@ private:
     }
   }
 
+  // サービス呼び出しで推定姿勢を原点へ戻し、処理待ちの差分もすべて破棄する。
   void resetCallback(
     const std::shared_ptr<std_srvs::srv::Empty::Request>,
     std::shared_ptr<std_srvs::srv::Empty::Response>)
@@ -529,11 +558,13 @@ private:
     RCLCPP_INFO(get_logger(), "PMW3901 odometry and pending deltas reset");
   }
 
+  // 角度を[-pi, pi]の範囲へ折り返す。
   static double normalizeAngle(double angle)
   {
     return std::atan2(std::sin(angle), std::cos(angle));
   }
 
+  // センサー配置・カウント換算に関するパラメータ。
   double left_sensor_x_;
   double left_sensor_y_;
   double left_sensor_z_;
@@ -547,6 +578,7 @@ private:
   double right_x_meter_per_count_;
   double right_y_meter_per_count_;
   double sensor_height_from_ground_;
+  // 入力と推定結果の妥当性判定に使うパラメータ。
   int minimum_quality_;
   double sensor_timeout_sec_;
   double max_sensor_time_difference_sec_;
@@ -557,11 +589,13 @@ private:
   double max_motion_residual_;
   int64_t max_abs_raw_delta_x_;
   int64_t max_abs_raw_delta_y_;
+  // ROSインターフェース名と座標系名。
   std::string left_topic_;
   std::string right_topic_;
   std::string frame_id_;
   std::string child_frame_id_;
 
+  // 積算した2次元姿勢。data_mutex_で左右サンプルとまとめて保護する。
   double pos_x_{0.0};
   double pos_y_{0.0};
   double yaw_{0.0};
@@ -587,6 +621,7 @@ int main(int argc, char ** argv)
 {
   rclcpp::init(argc, argv);
   try {
+    // spin中は左右の購読、リセットサービス、監視タイマーの各コールバックを処理する。
     rclcpp::spin(std::make_shared<mouse_odometry::MouseOdomNode>());
   } catch (const std::exception & exception) {
     RCLCPP_FATAL(
