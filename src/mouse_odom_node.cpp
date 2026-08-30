@@ -345,7 +345,25 @@ private:
 
     if (!validation.valid) {
       auto output = makeRejectedOutputLocked(validation, left_delta, right_delta);
-      if (validation.reject_reason == RejectReason::kTimeMismatch) {
+      if (validation.reject_reason == RejectReason::kCycleMismatch) {
+        if (cycleIsOlder(left_sample_.cycle_id, right_sample_.cycle_id)) {
+          left_sample_.pending = false;
+          RCLCPP_WARN_THROTTLE(
+            get_logger(), *get_clock(), 2000,
+            "PMW3901 cycle mismatch: discarding old LEFT cycle=%u, "
+            "keeping RIGHT cycle=%u",
+            static_cast<unsigned int>(left_sample_.cycle_id),
+            static_cast<unsigned int>(right_sample_.cycle_id));
+        } else {
+          right_sample_.pending = false;
+          RCLCPP_WARN_THROTTLE(
+            get_logger(), *get_clock(), 2000,
+            "PMW3901 cycle mismatch: keeping LEFT cycle=%u, "
+            "discarding old RIGHT cycle=%u",
+            static_cast<unsigned int>(left_sample_.cycle_id),
+            static_cast<unsigned int>(right_sample_.cycle_id));
+        }
+      } else if (validation.reject_reason == RejectReason::kTimeMismatch) {
         // 計測時刻が離れすぎている場合は古い側だけを破棄し、新しい側は次の観測との
         // 組み合わせに再利用する。運動モデルの残差が小さくても時刻同期の代わりにはならない。
         if (left_sample_.stamp < right_sample_.stamp) {

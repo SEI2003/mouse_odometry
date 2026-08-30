@@ -40,6 +40,13 @@ const char * rejectReasonName(RejectReason reason)
   }
 }
 
+bool cycleIsOlder(uint32_t lhs, uint32_t rhs)
+{
+  constexpr uint32_t kHalfCycleRange = uint32_t{1} << 31U;
+  const uint32_t forward_distance = rhs - lhs;
+  return forward_distance != 0U && forward_distance < kHalfCycleRange;
+}
+
 namespace
 {
 

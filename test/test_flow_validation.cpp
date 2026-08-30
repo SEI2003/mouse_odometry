@@ -170,4 +170,20 @@ TEST(FlowValidation, TestMAcceptsMatchingCycles)
   EXPECT_EQ(result.reject_reason, mouse_odometry::RejectReason::kNone);
 }
 
+TEST(CycleOrdering, IdentifiesOlderCycleOnEitherSide)
+{
+  EXPECT_TRUE(mouse_odometry::cycleIsOlder(100U, 101U));
+  EXPECT_FALSE(mouse_odometry::cycleIsOlder(101U, 100U));
+  EXPECT_FALSE(mouse_odometry::cycleIsOlder(100U, 100U));
+}
+
+TEST(CycleOrdering, HandlesUint32Wraparound)
+{
+  constexpr uint32_t max_cycle = std::numeric_limits<uint32_t>::max();
+
+  EXPECT_TRUE(mouse_odometry::cycleIsOlder(max_cycle, 0U));
+  EXPECT_TRUE(mouse_odometry::cycleIsOlder(max_cycle - 1U, 0U));
+  EXPECT_FALSE(mouse_odometry::cycleIsOlder(0U, max_cycle));
+}
+
 }  // namespace

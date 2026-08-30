@@ -25,6 +25,9 @@ enum class RejectReason : uint8_t
 
 const char * rejectReasonName(RejectReason reason);
 
+// uint32_tの循環シーケンス上でlhsがrhsより古いかを判定する。
+bool cycleIsOlder(uint32_t lhs, uint32_t rhs);
+
 struct FlowObservation
 {
   uint32_t cycle_id{0};
