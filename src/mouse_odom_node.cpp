@@ -39,11 +39,11 @@ public:
   {
     // 各センサーの取付位置・向き。位置は車体座標系で表す。
     left_sensor_x_ = declare_parameter<double>("left_sensor_x", 0.000);
-    left_sensor_y_ = declare_parameter<double>("left_sensor_y", 0.3517);
+    left_sensor_y_ = declare_parameter<double>("left_sensor_y", 0.3465);
     left_sensor_z_ = declare_parameter<double>("left_sensor_z", 0.285);
     left_sensor_yaw_ = declare_parameter<double>("left_sensor_yaw", 0.0);
     right_sensor_x_ = declare_parameter<double>("right_sensor_x", 0.000);
-    right_sensor_y_ = declare_parameter<double>("right_sensor_y", -0.3517);
+    right_sensor_y_ = declare_parameter<double>("right_sensor_y", -0.3465);
     right_sensor_z_ = declare_parameter<double>("right_sensor_z", 0.285);
     right_sensor_yaw_ = declare_parameter<double>("right_sensor_yaw", M_PI);
 
