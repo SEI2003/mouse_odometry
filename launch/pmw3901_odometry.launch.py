@@ -36,7 +36,7 @@ def generate_launch_description():
                 parameters=[
                     {
                         "left_sensor_yaw": 0.0,
-                        "right_sensor_yaw": M_PI,
+                        "right_sensor_yaw": math.pi,
                         "enable_xy_log": ParameterValue(
                             enable_xy_log, value_type=bool
                         ),
