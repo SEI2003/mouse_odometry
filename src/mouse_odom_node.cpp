@@ -49,11 +49,11 @@ public:
 
     // 1カウント当たりの移動距離。初期値は仮値なので、実機で計測して校正すること。
     left_x_meter_per_count_ =
-      declare_parameter<double>("left_x_meter_per_count", 0.00057730);
+      declare_parameter<double>("left_x_meter_per_count", 0.00054700);
     left_y_meter_per_count_ =
       declare_parameter<double>("left_y_meter_per_count", 0.00060285);
     right_x_meter_per_count_ =
-      declare_parameter<double>("right_x_meter_per_count", 0.00059794);
+      declare_parameter<double>("right_x_meter_per_count", 0.00052820);
     right_y_meter_per_count_ =
       declare_parameter<double>("right_y_meter_per_count", 0.00063004);
     sensor_height_from_ground_ =
