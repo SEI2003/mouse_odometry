@@ -38,14 +38,14 @@ public:
   : Node("mouse_odom_node"), reset_epoch_(now()), start_time_(now())
   {
     // 各センサーの取付位置・向き。位置は車体座標系で表す。
-    left_sensor_x_ = declare_parameter<double>("left_sensor_x", 0.220);
-    left_sensor_y_ = declare_parameter<double>("left_sensor_y", 0.055);
-    left_sensor_z_ = declare_parameter<double>("left_sensor_z", 0.282);
+    left_sensor_x_ = declare_parameter<double>("left_sensor_x", 0.000);
+    left_sensor_y_ = declare_parameter<double>("left_sensor_y", 0.3517);
+    left_sensor_z_ = declare_parameter<double>("left_sensor_z", 0.285);
     left_sensor_yaw_ = declare_parameter<double>("left_sensor_yaw", 0.0);
-    right_sensor_x_ = declare_parameter<double>("right_sensor_x", 0.220);
-    right_sensor_y_ = declare_parameter<double>("right_sensor_y", -0.055);
-    right_sensor_z_ = declare_parameter<double>("right_sensor_z", 0.282);
-    right_sensor_yaw_ = declare_parameter<double>("right_sensor_yaw", 0.0);
+    right_sensor_x_ = declare_parameter<double>("right_sensor_x", 0.000);
+    right_sensor_y_ = declare_parameter<double>("right_sensor_y", -0.3517);
+    right_sensor_z_ = declare_parameter<double>("right_sensor_z", 0.285);
+    right_sensor_yaw_ = declare_parameter<double>("right_sensor_yaw", M_PI);
 
     // 1カウント当たりの移動距離。初期値は仮値なので、実機で計測して校正すること。
     left_x_meter_per_count_ =
