@@ -46,6 +46,7 @@ public:
     right_sensor_y_ = declare_parameter<double>("right_sensor_y", -0.3465);
     right_sensor_z_ = declare_parameter<double>("right_sensor_z", 0.285);
     right_sensor_yaw_ = declare_parameter<double>("right_sensor_yaw", M_PI);
+    yaw_scale_ = declare_parameter<double>("yaw_scale", 0.9769);
 
     // 1カウント当たりの移動距離。初期値は仮値なので、実機で計測して校正すること。
     left_x_meter_per_count_ =
@@ -134,6 +135,7 @@ public:
       left_sensor_x_, left_sensor_y_, left_sensor_z_,
       right_sensor_x_, right_sensor_y_, right_sensor_z_,
       sensor_height_from_ground_);
+    RCLCPP_INFO(get_logger(), "Yaw scale: %.4f", yaw_scale_);
   }
 
 private:
@@ -187,6 +189,7 @@ private:
     require_finite(right_sensor_y_, "right_sensor_y");
     require_finite(right_sensor_z_, "right_sensor_z");
     require_finite(right_sensor_yaw_, "right_sensor_yaw");
+    require_positive(yaw_scale_, "yaw_scale");
     require_finite(left_x_meter_per_count_, "left_x_meter_per_count");
     require_finite(left_y_meter_per_count_, "left_y_meter_per_count");
     require_finite(right_x_meter_per_count_, "right_x_meter_per_count");
@@ -388,19 +391,21 @@ private:
 
     // 各センサー座標系の移動量から、車体中心の並進量(dx, dy)と旋回量(dyaw)を推定する。
     const MotionEstimate estimate = estimator_->estimate(left_delta, right_delta);
+    const double raw_delta_yaw = estimate.dyaw;
+    const double delta_yaw = raw_delta_yaw * yaw_scale_;
     // deltaはセンサーの積分区間に蓄積された移動量であるため、速度計算には左右の
     // 平均積分時間を使う。ROSコールバックの到着間隔は通信遅延を含むため使用しない。
     const double dt =
       0.5 * (left_sample_.integration_time + right_sample_.integration_time);
     const double vx = estimate.dx / dt;
     const double vy = estimate.dy / dt;
-    const double wz = estimate.dyaw / dt;
+    const double wz = delta_yaw / dt;
 
     ProcessedOutput output;
     fillDebugLocked(output.debug, validation, left_delta, right_delta);
     output.debug.delta_x_body = estimate.dx;
     output.debug.delta_y_body = estimate.dy;
-    output.debug.delta_yaw = estimate.dyaw;
+    output.debug.delta_yaw = delta_yaw;
     output.debug.vx = vx;
     output.debug.vy = vy;
     output.debug.wz = wz;
@@ -410,7 +415,7 @@ private:
     output.debug.motion_residual = estimate.residual;
 
     if (!std::isfinite(estimate.dx) || !std::isfinite(estimate.dy) ||
-      !std::isfinite(estimate.dyaw) || !std::isfinite(estimate.residual))
+      !std::isfinite(delta_yaw) || !std::isfinite(estimate.residual))
     {
       setPairRejection(output.debug, RejectReason::kNonfiniteValue);
       output.warn = true;
@@ -425,10 +430,10 @@ private:
     } else {
       // 区間中央の向きを使って車体座標系の移動量をワールド座標系へ回転し、
       // 現在姿勢へ積算する。旋回を含む区間で始点の向きだけを使う誤差を抑えられる。
-      const double yaw_mid = yaw_ + estimate.dyaw * 0.5;
+      const double yaw_mid = yaw_ + delta_yaw * 0.5;
       pos_x_ += estimate.dx * std::cos(yaw_mid) - estimate.dy * std::sin(yaw_mid);
       pos_y_ += estimate.dx * std::sin(yaw_mid) + estimate.dy * std::cos(yaw_mid);
-      yaw_ = normalizeAngle(yaw_ + estimate.dyaw);
+      yaw_ = normalizeAngle(yaw_ + delta_yaw);
 
       output.debug.pair_valid = true;
       output.debug.pair_reject_reason =
@@ -656,6 +661,7 @@ private:
   double right_sensor_y_;
   double right_sensor_z_;
   double right_sensor_yaw_;
+  double yaw_scale_;
   double left_x_meter_per_count_;
   double left_y_meter_per_count_;
   double right_x_meter_per_count_;
