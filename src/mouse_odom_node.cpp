@@ -7,6 +7,7 @@
 #include <filesystem>
 #include <fstream>
 #include <functional>
+#include <iomanip>
 #include <memory>
 #include <mutex>
 #include <limits>
@@ -83,6 +84,7 @@ public:
     child_frame_id_ =
       declare_parameter<std::string>("child_frame_id", "mouse_base_link");
     enable_xy_log_ = declare_parameter<bool>("enable_xy_log", false);
+    enable_debug_csv_log_ = declare_parameter<bool>("enable_debug_csv_log", false);
 
     validateParameters();
 
@@ -90,6 +92,9 @@ public:
       initializeSensorXYLog();
     } else {
       RCLCPP_INFO(get_logger(), "PMW3901 XY logging disabled");
+    }
+    if (enable_debug_csv_log_) {
+      initializeDebugCsvLog();
     }
 
     // センサー位置は、2点の移動量から車体の並進量と旋回量を解くために使う。
@@ -264,6 +269,111 @@ private:
     }
   }
 
+  void initializeDebugCsvLog()
+  {
+    const char * home = std::getenv("HOME");
+    if (home == nullptr || home[0] == '\0') {
+      throw std::runtime_error("HOME is not set; cannot create PMW3901 debug CSV log");
+    }
+
+    const std::filesystem::path log_directory = std::filesystem::path(home) / ".ros";
+    std::filesystem::create_directories(log_directory);
+
+    const std::time_t current_time = std::time(nullptr);
+    std::tm local_time{};
+    if (localtime_r(&current_time, &local_time) == nullptr) {
+      throw std::runtime_error("Failed to create timestamp for PMW3901 debug CSV log");
+    }
+
+    char filename[44];
+    if (std::strftime(
+        filename, sizeof(filename), "pmw3901_debug_%Y%m%d_%H%M%S.csv", &local_time) == 0)
+    {
+      throw std::runtime_error("Failed to format PMW3901 debug CSV log filename");
+    }
+
+    debug_csv_log_path_ = (log_directory / filename).string();
+    debug_csv_log_.open(debug_csv_log_path_, std::ios::out | std::ios::trunc);
+    if (!debug_csv_log_.is_open()) {
+      throw std::runtime_error("Failed to open PMW3901 debug CSV log: " + debug_csv_log_path_);
+    }
+
+    debug_csv_log_ << std::setprecision(17);
+    debug_csv_log_ <<
+      "elapsed_time_sec,cycle_id,left_cycle_id,right_cycle_id,"
+      "integration_time_sec,left_integration_time_sec,right_integration_time_sec,"
+      "left_raw_dx_count,left_raw_dy_count,right_raw_dx_count,right_raw_dy_count,"
+      "left_dx_m,left_dy_m,right_dx_m,right_dy_m,"
+      "left_quality_available,left_quality,right_quality_available,right_quality,"
+      "left_speed_mps,right_speed_mps,left_x_speed_mps,right_x_speed_mps,"
+      "raw_delta_yaw,corrected_delta_yaw,estimated_dx,estimated_dy,vx,vy,wz,"
+      "motion_residual,pair_valid,reject_reason,measurement_time_difference_sec,"
+      "integration_time_difference_sec\n";
+    RCLCPP_INFO(
+      get_logger(), "PMW3901 debug CSV log: %s", debug_csv_log_path_.c_str());
+  }
+
+  void writeDebugCsvLogLocked(
+    const rclcpp::Time & current_time,
+    const msg::Pmw3901Debug & debug,
+    const std::optional<double> & raw_delta_yaw)
+  {
+    const double unavailable = std::numeric_limits<double>::quiet_NaN();
+    const auto speed = [unavailable](double x, double y, double dt) {
+        return std::isfinite(x) && std::isfinite(y) && std::isfinite(dt) && dt > 0.0 ?
+               std::hypot(x, y) / dt : unavailable;
+      };
+    const auto x_speed = [unavailable](double x, double dt) {
+        return std::isfinite(x) && std::isfinite(dt) && dt > 0.0 ?
+               x / dt : unavailable;
+      };
+
+    const double integration_time_sec =
+      0.5 * (debug.left_integration_time_sec + debug.right_integration_time_sec);
+    const double left_speed_mps = speed(
+      debug.left_dx_m, debug.left_dy_m, debug.left_integration_time_sec);
+    const double right_speed_mps = speed(
+      debug.right_dx_m, debug.right_dy_m, debug.right_integration_time_sec);
+    const double left_x_speed_mps =
+      x_speed(debug.left_dx_m, debug.left_integration_time_sec);
+    const double right_x_speed_mps =
+      x_speed(debug.right_dx_m, debug.right_integration_time_sec);
+    const bool estimate_available = raw_delta_yaw.has_value();
+
+    debug_csv_log_ << (current_time - start_time_).seconds() << ',';
+    if (debug.cycle_match) {
+      debug_csv_log_ << debug.left_cycle_id;
+    }
+    debug_csv_log_ <<
+      ',' << debug.left_cycle_id << ',' << debug.right_cycle_id << ',' <<
+      integration_time_sec << ',' <<
+      debug.left_integration_time_sec << ',' << debug.right_integration_time_sec << ',' <<
+      debug.left_raw_dx_count << ',' << debug.left_raw_dy_count << ',' <<
+      debug.right_raw_dx_count << ',' << debug.right_raw_dy_count << ',' <<
+      debug.left_dx_m << ',' << debug.left_dy_m << ',' <<
+      debug.right_dx_m << ',' << debug.right_dy_m << ',' <<
+      static_cast<int>(debug.left_quality_available) << ',' << debug.left_quality << ',' <<
+      static_cast<int>(debug.right_quality_available) << ',' << debug.right_quality << ',' <<
+      left_speed_mps << ',' << right_speed_mps << ',' <<
+      left_x_speed_mps << ',' << right_x_speed_mps << ',' <<
+      raw_delta_yaw.value_or(unavailable) << ',' <<
+      (estimate_available ? debug.delta_yaw : unavailable) << ',' <<
+      (estimate_available ? debug.delta_x_body : unavailable) << ',' <<
+      (estimate_available ? debug.delta_y_body : unavailable) << ',' <<
+      (estimate_available ? debug.vx : unavailable) << ',' <<
+      (estimate_available ? debug.vy : unavailable) << ',' <<
+      (estimate_available ? debug.wz : unavailable) << ',' <<
+      (estimate_available ? debug.motion_residual : unavailable) << ',' <<
+      static_cast<int>(debug.pair_valid) << ',' << debug.status << ',' <<
+      debug.measurement_time_difference_sec << ',' <<
+      debug.integration_time_difference_sec << '\n';
+
+    ++debug_csv_log_rows_;
+    if (debug_csv_log_rows_ % 100 == 0) {
+      debug_csv_log_.flush();
+    }
+  }
+
   // 左右どちらかのflowメッセージを内部形式へ変換し、ペア処理を試みる。
   void handleFlow(bool is_left, const msg::Pmw3901Flow & message)
   {
@@ -386,6 +496,9 @@ private:
         left_sample_.pending = false;
         right_sample_.pending = false;
       }
+      if (enable_debug_csv_log_) {
+        writeDebugCsvLogLocked(current_time, output.debug, std::nullopt);
+      }
       return output;
     }
 
@@ -441,6 +554,10 @@ private:
       output.debug.status = "ok";
       output.odometry = makeOdometryLocked(
         output.debug.header.stamp, vx, vy, wz, estimate.residual);
+    }
+
+    if (enable_debug_csv_log_) {
+      writeDebugCsvLogLocked(current_time, output.debug, raw_delta_yaw);
     }
 
     left_sample_.pending = false;
@@ -684,9 +801,13 @@ private:
   std::string frame_id_;
   std::string child_frame_id_;
   bool enable_xy_log_;
+  bool enable_debug_csv_log_;
   std::ofstream sensor_xy_log_;
   std::string sensor_xy_log_path_;
   std::size_t sensor_xy_log_rows_{0};
+  std::ofstream debug_csv_log_;
+  std::string debug_csv_log_path_;
+  std::size_t debug_csv_log_rows_{0};
 
   // 積算した2次元姿勢。data_mutex_で左右サンプルとまとめて保護する。
   double pos_x_{0.0};
