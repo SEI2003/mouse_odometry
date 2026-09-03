@@ -46,7 +46,7 @@ public:
     right_sensor_y_ = declare_parameter<double>("right_sensor_y", -0.3465);
     right_sensor_z_ = declare_parameter<double>("right_sensor_z", 0.285);
     right_sensor_yaw_ = declare_parameter<double>("right_sensor_yaw", M_PI);
-    yaw_scale_ = declare_parameter<double>("yaw_scale", 0.9769);
+    yaw_scale_ = declare_parameter<double>("yaw_scale", 0.976);
 
     // 1カウント当たりの移動距離。初期値は仮値なので、実機で計測して校正すること。
     left_x_meter_per_count_ =
