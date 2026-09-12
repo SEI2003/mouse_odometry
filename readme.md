@@ -254,6 +254,7 @@ Published topics:
 | Topic | Type | 内容 |
 | --- | --- | --- |
 | `/mouse_odom` | `nav_msgs/msg/Odometry` | 受理済み観測だけを積算したodom。TFはpublishしない |
+| `/mouse_odom/pose2d` | `geometry_msgs/msg/Pose2D` | `/mouse_odom` と同じ積算姿勢のx/y/yaw |
 | `/mouse_odom/debug` | `mouse_odometry/msg/Pmw3901Debug` | cycle ID/match、raw/変換値、quality、左右・pair validity/reason、積算時間差、timestamp差、推定delta/速度、motion residual |
 
 Subscribed topics:
@@ -300,8 +301,28 @@ reset時刻以前のsource timestampを持つ遅延メッセージも棄却し�
 | `right_flow_topic` | `/pmw3901/right/flow` | 右入力topic |
 | `frame_id` | `mouse_odom` | Odometry親frame |
 | `child_frame_id` | `mouse_base_link` | Odometry子frame |
+| `enable_xy_log` | `false` | 左右センサのraw X/Y countをCSVへ保存 |
+| `enable_debug_csv_log` | `false` | 推定・判定・積算Odometryを含む詳細CSVを保存 |
 
 raw・速度・motion residual・quality閾値は、実測データから調整する必要があります。
+
+## CSVログ
+
+CSVログはデフォルトでは無効です。起動時に次のlaunch argumentで有効化できます。
+
+```bash
+ros2 launch mouse_odometry pmw3901_odometry.launch.py \
+  enable_xy_log:=true enable_debug_csv_log:=true
+```
+
+ログはノード起動時に `~/.ros` へ作成され、ファイル名には起動日時が入ります。
+
+| Parameter | File | 内容 |
+| --- | --- | --- |
+| `enable_xy_log` | `pmw3901_xy_YYYYMMDD_HHMMSS.csv` | cycle IDが一致した左右センサの `left_x,left_y,right_x,right_y` raw count |
+| `enable_debug_csv_log` | `pmw3901_debug_YYYYMMDD_HHMMSS.csv` | cycle、積算時間、raw/換算値、quality、推定増分、速度、判定結果、および積算Odometry |
+
+詳細CSVの `odom_x_m`, `odom_y_m`, `odom_yaw_rad` は、受理された現在行の増分を積算した後の `/mouse_odom` の姿勢です。x/yは `frame_id` 上のメートル、yawはラジアンで `[-pi, pi]` に正規化されています。棄却された行ではOdometryをpublishしないため、これら3列は `NaN` になります。ファイルへの書き込みは100データ行ごとにflushします。
 
 ## Packet v2候補
 

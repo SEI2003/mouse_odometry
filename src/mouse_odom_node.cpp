@@ -306,7 +306,8 @@ private:
       "left_dx_m,left_dy_m,right_dx_m,right_dy_m,"
       "left_quality_available,left_quality,right_quality_available,right_quality,"
       "left_speed_mps,right_speed_mps,left_x_speed_mps,right_x_speed_mps,"
-      "raw_delta_yaw,corrected_delta_yaw,estimated_dx,estimated_dy,vx,vy,wz,"
+      "raw_delta_yaw,corrected_delta_yaw,estimated_dx,estimated_dy,"
+      "odom_x_m,odom_y_m,odom_yaw_rad,vx,vy,wz,"
       "motion_residual,pair_valid,reject_reason,measurement_time_difference_sec,"
       "integration_time_difference_sec\n";
     RCLCPP_INFO(
@@ -339,6 +340,7 @@ private:
     const double right_x_speed_mps =
       x_speed(debug.right_dx_m, debug.right_integration_time_sec);
     const bool estimate_available = raw_delta_yaw.has_value();
+    const bool odometry_available = debug.pair_valid;
 
     debug_csv_log_ << (current_time - start_time_).seconds() << ',';
     if (debug.cycle_match) {
@@ -360,6 +362,9 @@ private:
       (estimate_available ? debug.delta_yaw : unavailable) << ',' <<
       (estimate_available ? debug.delta_x_body : unavailable) << ',' <<
       (estimate_available ? debug.delta_y_body : unavailable) << ',' <<
+      (odometry_available ? pos_x_ : unavailable) << ',' <<
+      (odometry_available ? pos_y_ : unavailable) << ',' <<
+      (odometry_available ? yaw_ : unavailable) << ',' <<
       (estimate_available ? debug.vx : unavailable) << ',' <<
       (estimate_available ? debug.vy : unavailable) << ',' <<
       (estimate_available ? debug.wz : unavailable) << ',' <<
