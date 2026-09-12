@@ -53,11 +53,11 @@ public:
     left_x_meter_per_count_ =
       declare_parameter<double>("left_x_meter_per_count", 0.00054700);
     left_y_meter_per_count_ =
-      declare_parameter<double>("left_y_meter_per_count", 0.00060285);
+      declare_parameter<double>("left_y_meter_per_count", 0.00541);
     right_x_meter_per_count_ =
       declare_parameter<double>("right_x_meter_per_count", 0.00052820);
     right_y_meter_per_count_ =
-      declare_parameter<double>("right_y_meter_per_count", 0.00063004);
+      declare_parameter<double>("right_y_meter_per_count", 0.00541);
     sensor_height_from_ground_ =
       declare_parameter<double>("sensor_height_from_ground", 0.0);
 

@@ -19,6 +19,7 @@ find_package(Eigen3 REQUIRED)
 
 find_package(nav_msgs REQUIRED)
 find_package(rclcpp REQUIRED)
+find_package(sensor_msgs REQUIRED)
 
 find_package(rosidl_default_generators REQUIRED)
 
@@ -149,6 +150,28 @@ target_compile_features(mouse_odom_node PUBLIC
 mouse_odometry_add_rosidl_typesupport(mouse_odom_node)
 
 # ============================================================
+# PMW3901 / IMU yaw fusion node
+# ============================================================
+
+add_executable(mouse_odom_imu_fusion_node
+  src/mouse_odom_imu_fusion_node.cpp
+)
+
+ament_target_dependencies(mouse_odom_imu_fusion_node
+  geometry_msgs
+  nav_msgs
+  rclcpp
+  sensor_msgs
+  std_srvs
+)
+
+target_compile_features(mouse_odom_imu_fusion_node PUBLIC
+  cxx_std_17
+)
+
+mouse_odometry_add_rosidl_typesupport(mouse_odom_imu_fusion_node)
+
+# ============================================================
 # PMW3901 serial bridge
 # ============================================================
 
@@ -180,6 +203,7 @@ mouse_odometry_add_rosidl_typesupport(pmw3901_serial_bridge)
 install(
   TARGETS
     mouse_odom_node
+    mouse_odom_imu_fusion_node
     planar_motion_estimator
     pmw3901_serial_bridge
     pmw3901_serial_protocol
