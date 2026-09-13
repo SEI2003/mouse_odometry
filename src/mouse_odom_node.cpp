@@ -20,9 +20,11 @@
 #include "mouse_odometry/msg/pmw3901_flow.hpp"
 #include "mouse_odometry/planar_motion_estimator.hpp"
 #include "geometry_msgs/msg/pose2_d.hpp"
+#include "geometry_msgs/msg/transform_stamped.hpp"
 #include "nav_msgs/msg/odometry.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "std_srvs/srv/empty.hpp"
+#include "tf2_ros/transform_broadcaster.h"
 
 using namespace std::chrono_literals;
 
@@ -31,7 +33,7 @@ namespace mouse_odometry
 
 // 2台のPMW3901から得た移動量を組み合わせ、平面上の自己位置を推定するROS 2ノード。
 // 左右のサンプルがそろった時点で入力を検証し、正常なペアだけを積算して
-// Odometry、Pose2D、および判定内容を含むデバッグ情報を配信する。
+// Odometry、Pose2D、TF、および判定内容を含むデバッグ情報を配信する。
 class MouseOdomNode : public rclcpp::Node
 {
 public:
@@ -83,6 +85,7 @@ public:
     frame_id_ = declare_parameter<std::string>("frame_id", "mouse_odom");
     child_frame_id_ =
       declare_parameter<std::string>("child_frame_id", "mouse_base_link");
+    publish_tf_ = declare_parameter<bool>("publish_tf", true);
     enable_xy_log_ = declare_parameter<bool>("enable_xy_log", false);
     enable_debug_csv_log_ = declare_parameter<bool>("enable_debug_csv_log", false);
 
@@ -105,6 +108,9 @@ public:
     odom_pub_ = create_publisher<nav_msgs::msg::Odometry>("/mouse_odom", 10);
     pose2d_pub_ = create_publisher<geometry_msgs::msg::Pose2D>("/mouse_odom/pose2d", 10);
     debug_pub_ = create_publisher<msg::Pmw3901Debug>("/mouse_odom/debug", 10);
+    if (publish_tf_) {
+      tf_broadcaster_ = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
+    }
 
     left_sub_ = create_subscription<msg::Pmw3901Flow>(
       left_topic_, rclcpp::SensorDataQoS(),
@@ -141,6 +147,9 @@ public:
       right_sensor_x_, right_sensor_y_, right_sensor_z_,
       sensor_height_from_ground_);
     RCLCPP_INFO(get_logger(), "Yaw scale: %.4f", yaw_scale_);
+    RCLCPP_INFO(
+      get_logger(), "TF publishing %s: %s -> %s",
+      publish_tf_ ? "enabled" : "disabled", frame_id_.c_str(), child_frame_id_.c_str());
   }
 
 private:
@@ -700,12 +709,23 @@ private:
     return odometry;
   }
 
-  // デバッグ情報は成否にかかわらず配信し、正常時だけOdometryとPose2Dを配信する。
+  // デバッグ情報は成否にかかわらず配信し、正常時だけOdometry、Pose2D、TFを配信する。
   void publishOutput(const ProcessedOutput & output)
   {
     debug_pub_->publish(output.debug);
     if (output.odometry.has_value()) {
       odom_pub_->publish(*output.odometry);
+
+      if (tf_broadcaster_) {
+        geometry_msgs::msg::TransformStamped transform;
+        transform.header = output.odometry->header;
+        transform.child_frame_id = output.odometry->child_frame_id;
+        transform.transform.translation.x = output.odometry->pose.pose.position.x;
+        transform.transform.translation.y = output.odometry->pose.pose.position.y;
+        transform.transform.translation.z = output.odometry->pose.pose.position.z;
+        transform.transform.rotation = output.odometry->pose.pose.orientation;
+        tf_broadcaster_->sendTransform(transform);
+      }
 
       geometry_msgs::msg::Pose2D pose2d;
       pose2d.x = output.odometry->pose.pose.position.x;
@@ -805,6 +825,7 @@ private:
   std::string right_topic_;
   std::string frame_id_;
   std::string child_frame_id_;
+  bool publish_tf_;
   bool enable_xy_log_;
   bool enable_debug_csv_log_;
   std::ofstream sensor_xy_log_;
@@ -828,6 +849,7 @@ private:
   rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr odom_pub_;
   rclcpp::Publisher<geometry_msgs::msg::Pose2D>::SharedPtr pose2d_pub_;
   rclcpp::Publisher<msg::Pmw3901Debug>::SharedPtr debug_pub_;
+  std::unique_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
   rclcpp::Subscription<msg::Pmw3901Flow>::SharedPtr left_sub_;
   rclcpp::Subscription<msg::Pmw3901Flow>::SharedPtr right_sub_;
   rclcpp::Service<std_srvs::srv::Empty>::SharedPtr reset_service_;
