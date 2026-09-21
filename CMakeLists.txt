@@ -25,6 +25,7 @@ find_package(rosidl_default_generators REQUIRED)
 
 find_package(std_msgs REQUIRED)
 find_package(std_srvs REQUIRED)
+find_package(tf2_ros REQUIRED)
 
 # ============================================================
 # Custom messages
@@ -136,6 +137,7 @@ ament_target_dependencies(mouse_odom_node
   rclcpp
   std_msgs
   std_srvs
+  tf2_ros
 )
 
 target_link_libraries(mouse_odom_node
@@ -163,6 +165,7 @@ ament_target_dependencies(mouse_odom_imu_fusion_node
   rclcpp
   sensor_msgs
   std_srvs
+  tf2_ros
 )
 
 target_compile_features(mouse_odom_imu_fusion_node PUBLIC

@@ -1,6 +1,6 @@
 # mouse_odometry
 
-2台のPMW3901オプティカルフローセンサの微小移動量から、車体中心の平面運動 `Δx / Δy / Δyaw` を推定し、ROS 2 `nav_msgs/msg/Odometry` を `/mouse_odom` に出力するパッケージです。
+2台のPMW3901オプティカルフローセンサの微小移動量から、車体中心の平面運動 `Δx / Δy / Δyaw` を推定し、ROS 2 `nav_msgs/msg/Odometry` を `/mouse_odom` に出力するパッケージです。既定では同じ姿勢を `mouse_odom -> mouse_base_link` のTFとしても配信します。
 
 ## 入力境界
 
@@ -12,7 +12,7 @@ PMW3901 x2 -> XIAO ESP32-C3 -> USB Serial binary v1
   -> /pmw3901/left/flow, /pmw3901/right/flow
   -> countの軸別校正・取付yaw補正
   -> 2センサ最小二乗推定
-  -> /mouse_odom
+  -> /mouse_odom + TF (mouse_odom -> mouse_base_link)
 ```
 
 入力型は `mouse_odometry/msg/Pmw3901Flow` です。
@@ -253,7 +253,7 @@ Published topics:
 
 | Topic | Type | 内容 |
 | --- | --- | --- |
-| `/mouse_odom` | `nav_msgs/msg/Odometry` | 受理済み観測だけを積算したodom。TFはpublishしない |
+| `/mouse_odom` | `nav_msgs/msg/Odometry` | 受理済み観測だけを積算したodom |
 | `/mouse_odom/pose2d` | `geometry_msgs/msg/Pose2D` | `/mouse_odom` と同じ積算姿勢のx/y/yaw |
 | `/mouse_odom/debug` | `mouse_odometry/msg/Pmw3901Debug` | cycle ID/match、raw/変換値、quality、左右・pair validity/reason、積算時間差、timestamp差、推定delta/速度、motion residual |
 
@@ -270,9 +270,41 @@ Service:
 | --- | --- | --- |
 | `/reset_mouse_odom` | `std_srvs/srv/Empty` | mutex内でx/y/yawと未処理の左右deltaをクリア |
 
-reset時刻以前のsource timestampを持つ遅延メッセージも棄却します。TFは意図的にpublishしません。
+reset時刻以前のsource timestampを持つ遅延メッセージも棄却します。`publish_tf=true` の場合、受理されたOdometryと同じタイムスタンプ・位置・姿勢で、`frame_id` から `child_frame_id` へのTFを配信します。
 
 `/mouse_odom` のデフォルトframeは `mouse_odom`、child frameは `mouse_base_link` です。poseは親frame、twistはchild frame基準です。共分散は現時点では固定の暫定値です。residualやqualityから動的共分散へ発展させる境界は一箇所にまとめていますが、未校正のモデルは追加していません。
+
+## RViz2でOdometryを可視化
+
+TF配信は既定で有効です。ノードを起動した後、別ターミナルでRViz2を起動します。
+
+```bash
+ros2 launch mouse_odometry pmw3901_odometry.launch.py publish_tf:=true
+rviz2
+```
+
+IMU融合launchを使う場合は、`mouse_odom_node` 側のTFを無効にし、融合ノードが `mouse_odom_imu -> mouse_base_link` を配信します。
+
+```bash
+ros2 launch mouse_odometry pmw3901_imu_odometry.launch.py publish_tf:=true
+rviz2
+```
+
+RViz2では次のように設定します。
+
+1. `Global Options > Fixed Frame` を `mouse_odom` に設定します。
+2. `Add` から `TF` を追加すると、移動する `mouse_base_link` 座標軸を確認できます。
+3. `Add` から `Odometry` を追加し、Topicを `/mouse_odom` に設定します。移動履歴も残したい場合はOdometry表示の `Keep` を1より大きくします。
+
+IMU融合launchの場合は、Fixed Frameを `mouse_odom_imu`、Odometry Topicを `/mouse_odom_imu` に読み替えてください。
+
+TFだけを確認する場合は、次のコマンドでも位置と姿勢を確認できます。
+
+```bash
+ros2 run tf2_ros tf2_echo mouse_odom mouse_base_link
+```
+
+ロボット形状を表示するには、別途URDFと `robot_state_publisher` が必要です。また、Nav2や他のOdometryノードが同じchild frameへのTFをすでに配信している場合は、TFの配信元が重複しないよう `publish_tf:=false` で起動してください。
 
 ## Parameters
 
@@ -301,6 +333,7 @@ reset時刻以前のsource timestampを持つ遅延メッセージも棄却し�
 | `right_flow_topic` | `/pmw3901/right/flow` | 右入力topic |
 | `frame_id` | `mouse_odom` | Odometry親frame |
 | `child_frame_id` | `mouse_base_link` | Odometry子frame |
+| `publish_tf` | `true` | `frame_id` から `child_frame_id` へのOdometry TFを配信 |
 | `enable_xy_log` | `false` | 左右センサのraw X/Y countをCSVへ保存 |
 | `enable_debug_csv_log` | `false` | 推定・判定・積算Odometryを含む詳細CSVを保存 |
 

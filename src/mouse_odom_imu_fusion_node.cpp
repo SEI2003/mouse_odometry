@@ -12,11 +12,13 @@
 #include <string>
 
 #include "geometry_msgs/msg/pose2_d.hpp"
+#include "geometry_msgs/msg/transform_stamped.hpp"
 #include "mouse_odometry/msg/pmw3901_debug.hpp"
 #include "nav_msgs/msg/odometry.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "sensor_msgs/msg/imu.hpp"
 #include "std_srvs/srv/empty.hpp"
+#include "tf2_ros/transform_broadcaster.h"
 
 namespace mouse_odometry
 {
@@ -37,6 +39,7 @@ public:
       "output_pose2d_topic", "/mouse_odom_imu/pose2d");
     frame_id_ = declare_parameter<std::string>("frame_id", "mouse_odom_imu");
     child_frame_id_ = declare_parameter<std::string>("child_frame_id", "mouse_base_link");
+    publish_tf_ = declare_parameter<bool>("publish_tf", true);
     imu_yaw_weight_ = declare_parameter<double>("imu_yaw_weight", 0.5);
     imu_timeout_sec_ = declare_parameter<double>("imu_timeout_sec", 0.2);
     imu_gyro_z_sign_ = declare_parameter<double>("imu_gyro_z_sign", 1.0);
@@ -49,6 +52,9 @@ public:
 
     odom_pub_ = create_publisher<nav_msgs::msg::Odometry>(output_odom_topic_, 10);
     pose2d_pub_ = create_publisher<geometry_msgs::msg::Pose2D>(output_pose2d_topic_, 10);
+    if (publish_tf_) {
+      tf_broadcaster_ = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
+    }
     imu_sub_ = create_subscription<sensor_msgs::msg::Imu>(
       imu_topic_, rclcpp::SensorDataQoS(),
       [this](sensor_msgs::msg::Imu::ConstSharedPtr message) {
@@ -73,6 +79,9 @@ public:
       "PMW3901/IMU yaw fusion ready: pmw=%s imu=%s output=%s weight=%.3f",
       pmw_debug_topic_.c_str(), imu_topic_.c_str(), output_odom_topic_.c_str(),
       imu_yaw_weight_);
+    RCLCPP_INFO(
+      get_logger(), "TF publishing %s: %s -> %s",
+      publish_tf_ ? "enabled" : "disabled", frame_id_.c_str(), child_frame_id_.c_str());
   }
 
 private:
@@ -331,6 +340,17 @@ private:
     odometry.twist.covariance[35] = 0.1;
     odom_pub_->publish(odometry);
 
+    if (tf_broadcaster_) {
+      geometry_msgs::msg::TransformStamped transform;
+      transform.header = odometry.header;
+      transform.child_frame_id = odometry.child_frame_id;
+      transform.transform.translation.x = odometry.pose.pose.position.x;
+      transform.transform.translation.y = odometry.pose.pose.position.y;
+      transform.transform.translation.z = odometry.pose.pose.position.z;
+      transform.transform.rotation = odometry.pose.pose.orientation;
+      tf_broadcaster_->sendTransform(transform);
+    }
+
     geometry_msgs::msg::Pose2D pose2d;
     pose2d.x = fused_x_;
     pose2d.y = fused_y_;
@@ -401,6 +421,7 @@ private:
   std::string output_pose2d_topic_;
   std::string frame_id_;
   std::string child_frame_id_;
+  bool publish_tf_;
   double imu_yaw_weight_;
   double imu_timeout_sec_;
   double imu_gyro_z_sign_;
@@ -423,6 +444,7 @@ private:
 
   rclcpp::Publisher<nav_msgs::msg::Odometry>::SharedPtr odom_pub_;
   rclcpp::Publisher<geometry_msgs::msg::Pose2D>::SharedPtr pose2d_pub_;
+  std::unique_ptr<tf2_ros::TransformBroadcaster> tf_broadcaster_;
   rclcpp::Subscription<sensor_msgs::msg::Imu>::SharedPtr imu_sub_;
   rclcpp::Subscription<msg::Pmw3901Debug>::SharedPtr pmw_debug_sub_;
   rclcpp::Service<std_srvs::srv::Empty>::SharedPtr reset_service_;

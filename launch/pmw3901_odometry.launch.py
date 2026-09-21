@@ -9,6 +9,7 @@ from launch_ros.parameter_descriptions import ParameterValue
 def generate_launch_description():
     serial_port = LaunchConfiguration("serial_port")
     serial_baud = LaunchConfiguration("serial_baud")
+    publish_tf = LaunchConfiguration("publish_tf")
     enable_xy_log = LaunchConfiguration("enable_xy_log")
     enable_debug_csv_log = LaunchConfiguration("enable_debug_csv_log")
 
@@ -16,6 +17,7 @@ def generate_launch_description():
         [
             DeclareLaunchArgument("serial_port", default_value="/dev/ttyACM0"),
             DeclareLaunchArgument("serial_baud", default_value="115200"),
+            DeclareLaunchArgument("publish_tf", default_value="true"),
             DeclareLaunchArgument("enable_xy_log", default_value="false"),
             DeclareLaunchArgument("enable_debug_csv_log", default_value="false"),
             Node(
@@ -40,6 +42,7 @@ def generate_launch_description():
                         "left_sensor_yaw": 0.0,
                         "right_sensor_yaw": math.pi,
                         "yaw_scale": 0.976,
+                        "publish_tf": ParameterValue(publish_tf, value_type=bool),
                         "enable_xy_log": ParameterValue(
                             enable_xy_log, value_type=bool
                         ),
