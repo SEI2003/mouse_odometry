@@ -20,6 +20,10 @@ def generate_launch_description():
     left_x_meter_per_count = LaunchConfiguration('left_x_meter_per_count')
     right_x_meter_per_count = LaunchConfiguration('right_x_meter_per_count')
 
+    # Y-axis calibration
+    left_y_meter_per_count = LaunchConfiguration('left_y_meter_per_count')
+    right_y_meter_per_count = LaunchConfiguration('right_y_meter_per_count')
+
     return LaunchDescription([
         DeclareLaunchArgument(
             'serial_port',
@@ -39,6 +43,16 @@ def generate_launch_description():
         DeclareLaunchArgument(
             'right_x_meter_per_count',
             default_value='0.00071023',
+        ),
+
+        # Calibrated Y-axis distance per count
+        DeclareLaunchArgument(
+            'left_y_meter_per_count',
+            default_value='0.000738',
+        ),
+        DeclareLaunchArgument(
+            'right_y_meter_per_count',
+            default_value='0.000820',
         ),
 
         Node(
@@ -79,9 +93,13 @@ def generate_launch_description():
                     right_x_meter_per_count, value_type=float
                 ),
 
-                # Y-axis calibration (unchanged)
-                'left_y_meter_per_count': 0.00541,
-                'right_y_meter_per_count': 0.00541,
+                # Y-axis calibration
+                'left_y_meter_per_count': ParameterValue(
+                    left_y_meter_per_count, value_type=float
+                ),
+                'right_y_meter_per_count': ParameterValue(
+                    right_y_meter_per_count, value_type=float
+                ),
 
                 # Yaw correction
                 'yaw_scale': 0.976,
