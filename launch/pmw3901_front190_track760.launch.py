@@ -1,0 +1,66 @@
+"""Start PMW3901 odometry with sensors 190 mm ahead of wheel center, 760 mm apart.
+
+Geometry assumes the odometry body's origin is at the center of the wheel axle.
+This launch is separate from the existing/original launch and does not change it.
+"""
+
+import math
+
+from launch import LaunchDescription
+from launch.actions import DeclareLaunchArgument
+from launch.substitutions import LaunchConfiguration
+from launch_ros.actions import Node
+from launch_ros.parameter_descriptions import ParameterValue
+
+
+def generate_launch_description():
+    serial_port = LaunchConfiguration('serial_port')
+    serial_baud = LaunchConfiguration('serial_baud')
+    publish_tf = LaunchConfiguration('publish_tf')
+    enable_xy_log = LaunchConfiguration('enable_xy_log')
+    enable_debug_csv_log = LaunchConfiguration('enable_debug_csv_log')
+
+    return LaunchDescription([
+        DeclareLaunchArgument(
+            'serial_port',
+            default_value='/dev/ttyACM0',
+            description='ESP32 / PMW3901 serial port',
+        ),
+        DeclareLaunchArgument('serial_baud', default_value='115200'),
+        DeclareLaunchArgument('publish_tf', default_value='true'),
+        DeclareLaunchArgument('enable_xy_log', default_value='false'),
+        DeclareLaunchArgument('enable_debug_csv_log', default_value='false'),
+        Node(
+            package='mouse_odometry',
+            executable='pmw3901_serial_bridge',
+            name='pmw3901_serial_bridge',
+            output='screen',
+            parameters=[{
+                'serial_port': serial_port,
+                'serial_baud': ParameterValue(serial_baud, value_type=int),
+                'image_debug_only': False,
+            }],
+        ),
+        Node(
+            package='mouse_odometry',
+            executable='mouse_odom_node',
+            name='mouse_odom_node',
+            output='screen',
+            parameters=[{
+                # +X is forward, +Y is left, positions in meters.
+                'left_sensor_x': 0.190,
+                'left_sensor_y': 0.380,
+                'right_sensor_x': 0.190,
+                'right_sensor_y': -0.380,
+                # Keep orientation, yaw correction and switches from the original launch.
+                'left_sensor_yaw': 0.0,
+                'right_sensor_yaw': math.pi,
+                'yaw_scale': 0.976,
+                'publish_tf': ParameterValue(publish_tf, value_type=bool),
+                'enable_xy_log': ParameterValue(enable_xy_log, value_type=bool),
+                'enable_debug_csv_log': ParameterValue(
+                    enable_debug_csv_log, value_type=bool,
+                ),
+            }],
+        ),
+    ])

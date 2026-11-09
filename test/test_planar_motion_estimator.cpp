@@ -106,4 +106,61 @@ TEST(PlanarMotionEstimator, RejectsDegenerateCoincidentGeometry)
     std::invalid_argument);
 }
 
+// Exercise the original node geometry and the new mounting geometry with
+// independent, known rigid-body displacements, including the forward offset.
+struct MountingGeometry
+{
+  double x;
+  double half_track;
+};
+
+class MountingGeometryTest : public ::testing::TestWithParam<MountingGeometry>
+{
+protected:
+  mouse_odometry::PlanarMotionEstimator estimator() const
+  {
+    const auto geometry = GetParam();
+    return {{geometry.x, geometry.half_track}, {geometry.x, -geometry.half_track}};
+  }
+};
+
+TEST_P(MountingGeometryTest, Forward)
+{
+  expectMotion(estimator().estimate({0.100, 0.0}, {0.100, 0.0}), 0.100, 0.0, 0.0);
+}
+
+TEST_P(MountingGeometryTest, Lateral)
+{
+  expectMotion(estimator().estimate({0.0, 0.100}, {0.0, 0.100}), 0.0, 0.100, 0.0);
+}
+
+TEST_P(MountingGeometryTest, PureYawRemovesForwardOffset)
+{
+  const auto geometry = GetParam();
+  constexpr double dyaw = 0.100;
+  expectMotion(
+    estimator().estimate(
+      {-geometry.half_track * dyaw, geometry.x * dyaw},
+      {geometry.half_track * dyaw, geometry.x * dyaw}),
+    0.0, 0.0, dyaw);
+}
+
+TEST_P(MountingGeometryTest, CombinedMotion)
+{
+  const auto geometry = GetParam();
+  constexpr double dx = 0.080;
+  constexpr double dy = 0.020;
+  constexpr double dyaw = 0.050;
+  expectMotion(
+    estimator().estimate(
+      {dx - geometry.half_track * dyaw, dy + geometry.x * dyaw},
+      {dx + geometry.half_track * dyaw, dy + geometry.x * dyaw}),
+    dx, dy, dyaw);
+}
+
+INSTANTIATE_TEST_SUITE_P(
+  OriginalAndFront190Track760,
+  MountingGeometryTest,
+  ::testing::Values(MountingGeometry{0.140, 0.3465}, MountingGeometry{0.190, 0.380}));
+
 }  // namespace
