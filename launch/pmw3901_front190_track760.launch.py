@@ -1,8 +1,4 @@
-"""Start PMW3901 odometry with sensors 190 mm ahead of wheel center, 760 mm apart.
-
-Geometry assumes the odometry body's origin is at the center of the wheel axle.
-This launch is separate from the existing/original launch and does not change it.
-"""
+"""Start PMW3901 odometry with sensors 190 mm ahead of wheel center, 760 mm apart."""
 
 import math
 
@@ -20,6 +16,10 @@ def generate_launch_description():
     enable_xy_log = LaunchConfiguration('enable_xy_log')
     enable_debug_csv_log = LaunchConfiguration('enable_debug_csv_log')
 
+    # Distance calibration parameters
+    left_x_meter_per_count = LaunchConfiguration('left_x_meter_per_count')
+    right_x_meter_per_count = LaunchConfiguration('right_x_meter_per_count')
+
     return LaunchDescription([
         DeclareLaunchArgument(
             'serial_port',
@@ -30,6 +30,17 @@ def generate_launch_description():
         DeclareLaunchArgument('publish_tf', default_value='true'),
         DeclareLaunchArgument('enable_xy_log', default_value='false'),
         DeclareLaunchArgument('enable_debug_csv_log', default_value='false'),
+
+        # Calibrated X-axis distance per count
+        DeclareLaunchArgument(
+            'left_x_meter_per_count',
+            default_value='0.00070012',
+        ),
+        DeclareLaunchArgument(
+            'right_x_meter_per_count',
+            default_value='0.00071023',
+        ),
+
         Node(
             package='mouse_odometry',
             executable='pmw3901_serial_bridge',
@@ -37,29 +48,53 @@ def generate_launch_description():
             output='screen',
             parameters=[{
                 'serial_port': serial_port,
-                'serial_baud': ParameterValue(serial_baud, value_type=int),
+                'serial_baud': ParameterValue(
+                    serial_baud, value_type=int
+                ),
                 'image_debug_only': False,
             }],
         ),
+
         Node(
             package='mouse_odometry',
             executable='mouse_odom_node',
             name='mouse_odom_node',
             output='screen',
             parameters=[{
-                # +X is forward, +Y is left, positions in meters.
+                # Sensor geometry
                 'left_sensor_x': 0.190,
                 'left_sensor_y': 0.380,
                 'right_sensor_x': 0.190,
                 'right_sensor_y': -0.380,
-                # Keep orientation, yaw correction and switches from the original launch.
+
+                # Sensor orientation
                 'left_sensor_yaw': 0.0,
                 'right_sensor_yaw': math.pi,
+
+                # X-axis calibration
+                'left_x_meter_per_count': ParameterValue(
+                    left_x_meter_per_count, value_type=float
+                ),
+                'right_x_meter_per_count': ParameterValue(
+                    right_x_meter_per_count, value_type=float
+                ),
+
+                # Y-axis calibration (unchanged)
+                'left_y_meter_per_count': 0.00541,
+                'right_y_meter_per_count': 0.00541,
+
+                # Yaw correction
                 'yaw_scale': 0.976,
-                'publish_tf': ParameterValue(publish_tf, value_type=bool),
-                'enable_xy_log': ParameterValue(enable_xy_log, value_type=bool),
+
+                # ROS and logging
+                'publish_tf': ParameterValue(
+                    publish_tf, value_type=bool
+                ),
+                'enable_xy_log': ParameterValue(
+                    enable_xy_log, value_type=bool
+                ),
                 'enable_debug_csv_log': ParameterValue(
-                    enable_debug_csv_log, value_type=bool,
+                    enable_debug_csv_log, value_type=bool
                 ),
             }],
         ),
