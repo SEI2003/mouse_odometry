@@ -38,21 +38,19 @@ def generate_launch_description():
         # Calibrated X-axis distance per count
         DeclareLaunchArgument(
             'left_x_meter_per_count',
-            default_value='0.00070012',
+            default_value='0.00074195',
         ),
         DeclareLaunchArgument(
             'right_x_meter_per_count',
-            default_value='0.00071023',
+            default_value='0.00094224',
         ),
-
-        # Calibrated Y-axis distance per count
         DeclareLaunchArgument(
             'left_y_meter_per_count',
-            default_value='0.000738',
+            default_value='0.00103584',
         ),
         DeclareLaunchArgument(
             'right_y_meter_per_count',
-            default_value='0.000820',
+            default_value='0.00083645',
         ),
 
         Node(
